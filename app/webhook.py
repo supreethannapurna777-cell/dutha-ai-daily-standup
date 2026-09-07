@@ -2,6 +2,7 @@ import os
 
 from dotenv import load_dotenv
 from flask import Flask, request
+from dashboard import create_dashboard
 
 from process_message import process_message
 from receive_message import save_message
@@ -71,6 +72,7 @@ def receive_webhook():
                 )
 
                 process_message(message_id)
+                create_dashboard(open_browser=False)
 
                 received_messages += 1
                 print(f"WhatsApp reply received: {text}")

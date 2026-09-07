@@ -31,7 +31,7 @@ def get_updates():
         ).fetchall()
 
 
-def create_dashboard():
+def create_dashboard(open_browser=True):
     """Generate a simple local HTML dashboard."""
 
     updates = get_updates()
@@ -142,7 +142,8 @@ def create_dashboard():
     DASHBOARD_PATH.write_text(html, encoding="utf-8")
     print(f"Dashboard created: {DASHBOARD_PATH}")
 
-    webbrowser.open(DASHBOARD_PATH.resolve().as_uri())
+    if open_browser:
+        webbrowser.open(DASHBOARD_PATH.resolve().as_uri())
 
 
 if __name__ == "__main__":
