@@ -22,11 +22,26 @@ def get_latest_message():
     return row
 
 
+def extract_numbered_answers(text):
+    """Extract answers written as 1, 2, 3 and 4."""
+
+    pattern = re.compile(
+        r"(?ms)^\s*([1-4])[\.\)\-:]\s*(.+?)"
+        r"(?=^\s*[1-4][\.\)\-:]|\Z)"
+    )
+
+    return {
+        number: answer.strip()
+        for number, answer in pattern.findall(text)
+    }
+
+
 def extract_update(original_reply):
-    """Extract basic fields using free local text rules."""
+    """Extract stand-up fields using free local text rules."""
 
     text = original_reply.strip()
     lower_text = text.lower()
+    answers = extract_numbered_answers(text)
 
     task = "Not specified"
     people = "Not specified"
@@ -34,35 +49,63 @@ def extract_update(original_reply):
     dependencies = "Not specified"
     expected_completion = "Not specified"
 
-    task_match = re.search(
-        r"today\s+i\s+will\s+(.+?)(?:,\s*needs|\.\s*needs|$)",
-        lower_text,
-    )
+    if answers:
+        task = answers.get("1", task)
+        blocker_answer = answers.get("2", "")
+        people = answers.get("3", people)
+        expected_completion = answers.get("4", expected_completion)
 
-    if task_match:
-        task = task_match.group(1).strip()
+        if blocker_answer:
+            blocker_lower = blocker_answer.lower()
 
-    people_match = re.search(
-        r"(?:with|coordinate with)\s+([a-zA-Z]+)",
-        lower_text,
-    )
+            if (
+                "no blocker" in blocker_lower
+                or "no dependency" in blocker_lower
+                or blocker_lower in {"none", "no", "nil"}
+            ):
+                blockers = "None mentioned"
+                dependencies = "None mentioned"
+            else:
+                blockers = blocker_answer
+                dependencies = blocker_answer
 
-    if people_match:
-        people = people_match.group(1).strip()
+    else:
+        task_match = re.search(
+            r"(?:today\s+i\s+will|i\s+will\s+work\s+on)\s+"
+            r"(.+?)(?:\.|\n|$)",
+            text,
+            re.IGNORECASE,
+        )
 
-    dependency_match = re.search(
-        r"to get\s+(.+?)(?:\.|$)",
-        lower_text,
-    )
+        if task_match:
+            task = task_match.group(1).strip()
 
-    if dependency_match:
-        dependencies = dependency_match.group(1).strip()
+        people_match = re.search(
+            r"(?:coordinate\s+with|connect\s+with|with)\s+"
+            r"([a-zA-Z][a-zA-Z ]+?)(?:\.|\n|$)",
+            text,
+            re.IGNORECASE,
+        )
 
-    if "no blocker" in lower_text or "no blockers" in lower_text:
-        blockers = "None mentioned"
+        if people_match:
+            people = people_match.group(1).strip()
 
-    if "today" in lower_text:
-        expected_completion = "Work mentioned for today"
+        if (
+            "no blocker" in lower_text
+            or "no dependency" in lower_text
+        ):
+            blockers = "None mentioned"
+            dependencies = "None mentioned"
+
+        completion_match = re.search(
+            r"(?:expected\s+completion(?:\s+time)?|complete)"
+            r"\s*(?:is|by|:)?\s*(.+?)(?:\.|\n|$)",
+            text,
+            re.IGNORECASE,
+        )
+
+        if completion_match:
+            expected_completion = completion_match.group(1).strip()
 
     return {
         "tasks": task,
