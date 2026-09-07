@@ -1,0 +1,88 @@
+import os
+
+import requests
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
+ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
+PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+RECIPIENT = os.getenv("WHATSAPP_RECIPIENT")
+API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v23.0")
+
+
+def validate_configuration():
+    required_values = {
+        "WHATSAPP_ACCESS_TOKEN": ACCESS_TOKEN,
+        "WHATSAPP_PHONE_NUMBER_ID": PHONE_NUMBER_ID,
+        "WHATSAPP_RECIPIENT": RECIPIENT,
+    }
+
+    missing = [
+        name
+        for name, value in required_values.items()
+        if not value
+    ]
+
+    if missing:
+        raise RuntimeError(
+            "Missing environment variables: " + ", ".join(missing)
+        )
+
+
+def send_test_message():
+    """Send Meta's approved hello_world test template."""
+
+    validate_configuration()
+
+    url = (
+        f"https://graph.facebook.com/"
+        f"{API_VERSION}/{PHONE_NUMBER_ID}/messages"
+    )
+
+    headers = {
+        "Authorization": f"Bearer {ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": RECIPIENT,
+        "type": "template",
+        "template": {
+            "name": "hello_world",
+            "language": {
+                "code": "en_US",
+            },
+        },
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        timeout=30,
+    )
+
+    if response.ok:
+        result = response.json()
+        message_id = result["messages"][0]["id"]
+
+        print("WhatsApp test message sent successfully.")
+        print(f"Message ID: {message_id}")
+        return
+
+    print(f"WhatsApp API request failed: HTTP {response.status_code}")
+
+    try:
+        error = response.json().get("error", {})
+        print(f"Error type: {error.get('type', 'Unknown')}")
+        print(f"Error code: {error.get('code', 'Unknown')}")
+        print(f"Message: {error.get('message', 'Unknown error')}")
+    except ValueError:
+        print("Meta returned a non-JSON error response.")
+
+
+if __name__ == "__main__":
+    send_test_message()
