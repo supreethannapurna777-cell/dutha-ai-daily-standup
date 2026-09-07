@@ -1,0 +1,19 @@
+# Python virtual environment
+.venv/
+
+# Python temporary files
+__pycache__/
+*.pyc
+
+# Secret keys and passwords
+.env
+
+# Local database and generated reports
+data/*.db
+data/*.xlsx
+
+# VS Code local settings
+.vscode/
+data/*.csv
+data/dashboard.html
+data/team_members.json
