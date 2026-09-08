@@ -1,7 +1,11 @@
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 
-from extract_update import extract_update
+try:
+    from .extract_update import extract_update
+except ImportError:
+    from extract_update import extract_update
 
 
 DATABASE_PATH = Path("data/standup.db")
@@ -12,7 +16,7 @@ def initialise_processed_table():
 
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with closing(sqlite3.connect(DATABASE_PATH)) as connection:
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS processed_updates (
@@ -29,6 +33,7 @@ def initialise_processed_table():
             )
             """
         )
+        connection.commit()
 
 
 def process_message(message_id):
@@ -36,7 +41,7 @@ def process_message(message_id):
 
     initialise_processed_table()
 
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with closing(sqlite3.connect(DATABASE_PATH)) as connection:
         message = connection.execute(
             """
             SELECT id, sender_name, original_reply
@@ -103,6 +108,8 @@ def process_message(message_id):
             ("processed locally", message_id),
         )
 
+        connection.commit()
+
     print("Message processed and structured result saved.")
     print(f"Message ID: {message_id}")
     print(f"Sender: {sender_name}")
@@ -114,7 +121,7 @@ def process_latest_message():
 
     initialise_processed_table()
 
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with closing(sqlite3.connect(DATABASE_PATH)) as connection:
         message = connection.execute(
             """
             SELECT id

@@ -1,3 +1,4 @@
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 import sqlite3
@@ -11,7 +12,7 @@ def initialise_message_table():
 
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with closing(sqlite3.connect(DATABASE_PATH)) as connection:
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS incoming_messages (
@@ -24,6 +25,7 @@ def initialise_message_table():
             )
             """
         )
+        connection.commit()
 
 
 def save_message(sender_name, sender_phone, original_reply):
@@ -32,7 +34,7 @@ def save_message(sender_name, sender_phone, original_reply):
     initialise_message_table()
     received_at = datetime.now().isoformat(timespec="seconds")
 
-    with sqlite3.connect(DATABASE_PATH) as connection:
+    with closing(sqlite3.connect(DATABASE_PATH)) as connection:
         cursor = connection.execute(
             """
             INSERT INTO incoming_messages (
@@ -52,7 +54,9 @@ def save_message(sender_name, sender_phone, original_reply):
                 "received - not processed",
             ),
         )
+
         message_id = cursor.lastrowid
+        connection.commit()
 
     return message_id
 
