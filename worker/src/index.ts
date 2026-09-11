@@ -1,11 +1,10 @@
+import { createDashboardResponse } from "./dashboard";
+import type { WorkerEnv } from "./env";
+import { verifyMetaSignature } from "./meta-signature";
 import { processWebhookPayload } from "./webhook";
+import { runScheduledAction } from "./scheduler";
 
-
-export interface WorkerEnv {
-	DB: D1Database;
-	WHATSAPP_API_VERSION: string;
-	WHATSAPP_WEBHOOK_VERIFY_TOKEN: string;
-}
+export type { WorkerEnv } from "./env";
 
 
 function jsonResponse(
@@ -48,10 +47,31 @@ async function receiveWebhook(
 	request: Request,
 	env: WorkerEnv,
 ): Promise<Response> {
+	if (!env.WHATSAPP_APP_SECRET) {
+		return jsonResponse(
+			{ error: "Webhook security is not configured" },
+			503,
+		);
+	}
+
+	const rawBody = await request.text();
+	const signatureIsValid = await verifyMetaSignature(
+		rawBody,
+		request.headers.get("X-Hub-Signature-256"),
+		env.WHATSAPP_APP_SECRET,
+	);
+
+	if (!signatureIsValid) {
+		return jsonResponse(
+			{ error: "Invalid webhook signature" },
+			401,
+		);
+	}
+
 	let payload: unknown;
 
 	try {
-		payload = await request.json();
+		payload = JSON.parse(rawBody);
 	} catch {
 		return jsonResponse(
 			{ error: "Invalid JSON payload" },
@@ -101,9 +121,30 @@ export default {
 			return receiveWebhook(request, env);
 		}
 
+		if (
+			request.method === "GET" &&
+			url.pathname === "/dashboard"
+		) {
+			return createDashboardResponse(request, env);
+		}
+
 		return jsonResponse(
 			{ error: "Not found" },
 			404,
+		);
+		},
+
+	async scheduled(
+		controller: ScheduledController,
+		env: WorkerEnv,
+		context: ExecutionContext,
+	): Promise<void> {
+		context.waitUntil(
+			runScheduledAction(
+				controller.cron,
+				controller.scheduledTime,
+				env,
+			).then(() => undefined),
 		);
 	},
 } satisfies ExportedHandler<WorkerEnv>;

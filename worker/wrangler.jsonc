@@ -8,7 +8,12 @@
 	},
 	"upload_source_maps": true,
 	"vars": {
-		"WHATSAPP_API_VERSION": "v26.0"
+		"WHATSAPP_API_VERSION": "v26.0",
+		"WHATSAPP_TEMPLATE_LANGUAGE": "en_US",
+		"WHATSAPP_INITIAL_TEMPLATE_NAME": "daily_standup_request",
+		"WHATSAPP_REMINDER_TEMPLATE_NAME": "daily_standup_reminder",
+		"AUTOMATION_ENABLED": "false",
+		"DASHBOARD_USERNAME": "admin"
 	},
 	"d1_databases": [
 		{
