@@ -1,72 +1,177 @@
 import sys
-import time
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from reminder_status import display_status
+try:
+    from .reminder_status import (
+        display_status,
+        get_pending_members,
+        load_team_members,
+    )
+    from .whatsapp_api import send_reminder, send_standup_request
+except ImportError:
+    from reminder_status import (
+        display_status,
+        get_pending_members,
+        load_team_members,
+    )
+    from whatsapp_api import send_reminder, send_standup_request
+
+
+TIMEZONE = "Asia/Kolkata"
+
+
+def valid_recipient(member):
+    """Return whether a roster member has a phone number."""
+
+    return bool(str(member.get("phone", "")).strip())
 
 
 def send_initial_request():
-    """Placeholder for the 12 PM WhatsApp request."""
+    """Send the daily stand-up request to every roster member."""
 
-    print("\n[12 PM] Initial daily update request should be sent.")
-    print("WhatsApp sending will be connected later.")
+    team_members = load_team_members()
+    sent = 0
+    failed = 0
+    skipped = 0
+
+    print("\n[12 PM] Sending initial daily stand-up requests.")
+
+    for member in team_members:
+        name = member["name"]
+        phone = member.get("phone", "")
+
+        if not valid_recipient(member):
+            print(f"Skipped {name}: phone number is missing.")
+            skipped += 1
+            continue
+
+        try:
+            if send_standup_request(name, phone):
+                sent += 1
+            else:
+                failed += 1
+        except Exception as error:
+            failed += 1
+            print(f"Failed to send to {name}: {error}")
+
+    print(
+        f"Initial requests complete: "
+        f"{sent} sent, {failed} failed, {skipped} skipped."
+    )
+
+    return {
+        "sent": sent,
+        "failed": failed,
+        "skipped": skipped,
+    }
+
+
+def send_pending_reminders(reminder_number):
+    """Send the selected reminder only to pending members."""
+
+    pending_members = get_pending_members(reminder_number)
+    sent = 0
+    failed = 0
+    skipped = 0
+
+    timing = "3 PM" if reminder_number == 1 else "6 PM"
+    print(f"\n[{timing}] Sending reminders to pending members.")
+
+    for member in pending_members:
+        name = member["name"]
+        phone = member.get("phone", "")
+
+        if not valid_recipient(member):
+            print(f"Skipped {name}: phone number is missing.")
+            skipped += 1
+            continue
+
+        try:
+            if send_reminder(name, phone, reminder_number):
+                sent += 1
+            else:
+                failed += 1
+        except Exception as error:
+            failed += 1
+            print(f"Failed to send reminder to {name}: {error}")
+
+    print(
+        f"{timing} reminders complete: "
+        f"{sent} sent, {failed} failed, {skipped} skipped."
+    )
+
+    return {
+        "sent": sent,
+        "failed": failed,
+        "skipped": skipped,
+    }
 
 
 def send_three_pm_reminder():
-    """Check who needs the 3 PM reminder."""
+    """Send the first reminder to members still pending."""
 
-    print("\n[3 PM] Checking reminder status.")
-    display_status()
+    return send_pending_reminders(1)
 
 
 def send_six_pm_reminder():
-    """Check who needs the final reminder."""
+    """Send the final reminder to members still pending."""
 
-    print("\n[6 PM] Checking final reminder status.")
-    display_status()
+    return send_pending_reminders(2)
 
 
 def run_demo():
-    """Run every scheduled action once for testing."""
+    """Preview reminder status without sending any messages."""
 
-    print("--- SCHEDULER DEMO ---")
-    send_initial_request()
-    send_three_pm_reminder()
-    send_six_pm_reminder()
+    print("--- SAFE SCHEDULER DEMO ---")
+    print("No WhatsApp messages will be sent.\n")
+    display_status()
     print("\nScheduler demo completed.")
 
 
 def run_scheduler():
-    """Run the real daily schedule."""
+    """Run the weekday schedule in Indian Standard Time."""
 
-    scheduler = BlockingScheduler()
+    scheduler = BlockingScheduler(timezone=TIMEZONE)
 
     scheduler.add_job(
         send_initial_request,
         "cron",
+        day_of_week="mon-fri",
         hour=12,
         minute=0,
+        id="initial_request",
+        max_instances=1,
+        coalesce=True,
     )
 
     scheduler.add_job(
         send_three_pm_reminder,
         "cron",
+        day_of_week="mon-fri",
         hour=15,
         minute=0,
+        id="three_pm_reminder",
+        max_instances=1,
+        coalesce=True,
     )
 
     scheduler.add_job(
         send_six_pm_reminder,
         "cron",
+        day_of_week="mon-fri",
         hour=18,
         minute=0,
+        id="six_pm_reminder",
+        max_instances=1,
+        coalesce=True,
     )
 
-    print("Daily scheduler is running.")
-    print("12:00 — Initial request")
-    print("15:00 — First reminder check")
-    print("18:00 — Final reminder check")
+    print("Daily scheduler is running in Asia/Kolkata timezone.")
+    print("Monday-Friday:")
+    print("12:00 - Initial request")
+    print("15:00 - First reminder")
+    print("18:00 - Final reminder")
     print("Press Ctrl+C to stop.")
 
     try:

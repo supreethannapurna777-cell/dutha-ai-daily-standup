@@ -4,22 +4,33 @@ import sys
 import requests
 from dotenv import load_dotenv
 
-from message_templates import initial_request_message
+try:
+    from .message_templates import initial_request_message, reminder_message
+except ImportError:
+    from message_templates import initial_request_message, reminder_message
 
 
 load_dotenv()
 
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-RECIPIENT = os.getenv("WHATSAPP_RECIPIENT")
+DEFAULT_RECIPIENT = os.getenv("WHATSAPP_RECIPIENT")
 API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v23.0")
 
 
-def validate_configuration():
+def normalise_phone(phone):
+    """Return a phone number containing digits only."""
+
+    return "".join(character for character in str(phone) if character.isdigit())
+
+
+def validate_configuration(recipient):
+    """Validate credentials and the selected recipient."""
+
     required_values = {
         "WHATSAPP_ACCESS_TOKEN": ACCESS_TOKEN,
         "WHATSAPP_PHONE_NUMBER_ID": PHONE_NUMBER_ID,
-        "WHATSAPP_RECIPIENT": RECIPIENT,
+        "recipient phone number": recipient,
     }
 
     missing = [
@@ -30,14 +41,15 @@ def validate_configuration():
 
     if missing:
         raise RuntimeError(
-            "Missing environment variables: " + ", ".join(missing)
+            "Missing configuration: " + ", ".join(missing)
         )
 
 
 def send_request(payload):
-    """Send a request to the WhatsApp Cloud API."""
+    """Send one request through the WhatsApp Cloud API."""
 
-    validate_configuration()
+    recipient = payload.get("to")
+    validate_configuration(recipient)
 
     url = (
         f"https://graph.facebook.com/"
@@ -58,7 +70,12 @@ def send_request(payload):
 
     if response.ok:
         result = response.json()
-        message_id = result["messages"][0]["id"]
+        messages = result.get("messages", [])
+        message_id = (
+            messages[0].get("id", "Not returned")
+            if messages
+            else "Not returned"
+        )
 
         print("WhatsApp message sent successfully.")
         print(f"Message ID: {message_id}")
@@ -77,12 +94,33 @@ def send_request(payload):
     return False
 
 
-def send_test_template():
-    """Send Meta's approved hello_world test template."""
+def send_text_message(recipient, message):
+    """Send a free-text message during an open conversation window."""
+
+    recipient = normalise_phone(recipient)
 
     payload = {
         "messaging_product": "whatsapp",
-        "to": RECIPIENT,
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "text",
+        "text": {
+            "preview_url": False,
+            "body": message,
+        },
+    }
+
+    return send_request(payload)
+
+
+def send_test_template(recipient=None):
+    """Send Meta's approved hello_world test template."""
+
+    recipient = normalise_phone(recipient or DEFAULT_RECIPIENT)
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": recipient,
         "type": "template",
         "template": {
             "name": "hello_world",
@@ -95,23 +133,23 @@ def send_test_template():
     return send_request(payload)
 
 
-def send_standup_request(name):
-    """Send the custom stand-up request during an open conversation."""
+def send_standup_request(name, recipient=None):
+    """Send a stand-up request to one selected recipient."""
 
-    message = initial_request_message(name)
+    recipient = recipient or DEFAULT_RECIPIENT
+    return send_text_message(
+        recipient,
+        initial_request_message(name),
+    )
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": RECIPIENT,
-        "type": "text",
-        "text": {
-            "preview_url": False,
-            "body": message,
-        },
-    }
 
-    return send_request(payload)
+def send_reminder(name, recipient, reminder_number):
+    """Send a 3 PM or 6 PM reminder to one recipient."""
+
+    return send_text_message(
+        recipient,
+        reminder_message(name, reminder_number),
+    )
 
 
 if __name__ == "__main__":

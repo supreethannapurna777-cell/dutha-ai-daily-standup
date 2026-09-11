@@ -1,3 +1,4 @@
+from contextlib import closing
 from datetime import datetime
 import json
 from pathlib import Path
@@ -11,6 +12,12 @@ THREE_PM = "15:00:00"
 SIX_PM = "18:00:00"
 
 
+def normalise_phone(phone):
+    """Return a phone number containing digits only."""
+
+    return "".join(character for character in str(phone) if character.isdigit())
+
+
 def load_team_members():
     """Load team members from the JSON roster."""
 
@@ -19,33 +26,42 @@ def load_team_members():
 
 
 def get_response_times():
-    """Read today's response times."""
+    """Return today's earliest reply time for each sender phone."""
 
     today = datetime.now().strftime("%Y-%m-%d")
 
-    with sqlite3.connect(DATABASE_PATH) as connection:
-        rows = connection.execute(
-            """
-            SELECT team_member, response_time
-            FROM daily_updates
-            WHERE date = ?
-            """,
-            (today,),
-        ).fetchall()
+    if not DATABASE_PATH.exists():
+        return {}
+
+    try:
+        with closing(sqlite3.connect(DATABASE_PATH)) as connection:
+            rows = connection.execute(
+                """
+                SELECT sender_phone, MIN(received_at)
+                FROM incoming_messages
+                WHERE substr(received_at, 1, 10) = ?
+                GROUP BY sender_phone
+                """,
+                (today,),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
 
     response_times = {}
 
-    for team_member, response_time in rows:
-        response_times[team_member.lower()] = response_time.split(
-            "T",
-            maxsplit=1,
-        )[1]
+    for sender_phone, received_at in rows:
+        if not sender_phone or not received_at:
+            continue
+
+        phone = normalise_phone(sender_phone)
+        response_time = received_at.split("T", maxsplit=1)[-1]
+        response_times[phone] = response_time
 
     return response_times
 
 
 def calculate_reminder_status(response_time):
-    """Decide which reminders are required."""
+    """Describe which scheduled messages were required."""
 
     if response_time is None:
         return {
@@ -75,8 +91,40 @@ def calculate_reminder_status(response_time):
     }
 
 
+def needs_reminder(response_time, reminder_number):
+    """Return whether a member needs the selected reminder."""
+
+    if response_time is None:
+        return True
+
+    if reminder_number == 1:
+        return response_time > THREE_PM
+
+    if reminder_number == 2:
+        return response_time > SIX_PM
+
+    raise ValueError("reminder_number must be 1 or 2")
+
+
+def get_pending_members(reminder_number):
+    """Return roster members requiring the selected reminder."""
+
+    team_members = load_team_members()
+    response_times = get_response_times()
+    pending_members = []
+
+    for member in team_members:
+        phone = normalise_phone(member.get("phone", ""))
+        response_time = response_times.get(phone)
+
+        if needs_reminder(response_time, reminder_number):
+            pending_members.append(member)
+
+    return pending_members
+
+
 def display_status():
-    """Display reminder decisions for every roster member."""
+    """Display today's reminder decisions for every roster member."""
 
     team_members = load_team_members()
     response_times = get_response_times()
@@ -85,8 +133,9 @@ def display_status():
 
     for member in team_members:
         name = member["name"]
-        department = member["department"]
-        response_time = response_times.get(name.lower())
+        department = member.get("department", "Not specified")
+        phone = normalise_phone(member.get("phone", ""))
+        response_time = response_times.get(phone)
         status = calculate_reminder_status(response_time)
 
         print(f"Team member: {name}")
