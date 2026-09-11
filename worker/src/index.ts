@@ -3,6 +3,11 @@ import type { WorkerEnv } from "./env";
 import { verifyMetaSignature } from "./meta-signature";
 import { processWebhookPayload } from "./webhook";
 import { runScheduledAction } from "./scheduler";
+import {
+	dataDeletionResponse,
+	privacyPolicyResponse,
+	termsOfServiceResponse,
+} from "./legal";
 
 export type { WorkerEnv } from "./env";
 
@@ -120,7 +125,26 @@ export default {
 		) {
 			return receiveWebhook(request, env);
 		}
+				if (
+			request.method === "GET" &&
+			url.pathname === "/privacy"
+		) {
+			return privacyPolicyResponse();
+		}
 
+		if (
+			request.method === "GET" &&
+			url.pathname === "/data-deletion"
+		) {
+			return dataDeletionResponse();
+		}
+
+		if (
+			request.method === "GET" &&
+			url.pathname === "/terms"
+		) {
+			return termsOfServiceResponse();
+		}
 		if (
 			request.method === "GET" &&
 			url.pathname === "/dashboard"
