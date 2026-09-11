@@ -1,13 +1,13 @@
 import { createDashboardResponse } from "./dashboard";
 import type { WorkerEnv } from "./env";
-import { verifyMetaSignature } from "./meta-signature";
-import { processWebhookPayload } from "./webhook";
-import { runScheduledAction } from "./scheduler";
 import {
 	dataDeletionResponse,
 	privacyPolicyResponse,
 	termsOfServiceResponse,
 } from "./legal";
+import { verifyMetaSignature } from "./meta-signature";
+import { runScheduledAction } from "./scheduler";
+import { processWebhookPayload } from "./webhook";
 
 export type { WorkerEnv } from "./env";
 
@@ -60,6 +60,7 @@ async function receiveWebhook(
 	}
 
 	const rawBody = await request.text();
+
 	const signatureIsValid = await verifyMetaSignature(
 		rawBody,
 		request.headers.get("X-Hub-Signature-256"),
@@ -89,6 +90,13 @@ async function receiveWebhook(
 		env.DB,
 	);
 
+	console.log(JSON.stringify({
+		event: "whatsapp_webhook_processed",
+		received: result.received,
+		duplicates: result.duplicates,
+		ignored: result.ignored,
+	}));
+
 	return jsonResponse({
 		status: "EVENT_RECEIVED",
 		...result,
@@ -104,7 +112,10 @@ export default {
 	): Promise<Response> {
 		const url = new URL(request.url);
 
-		if (request.method === "GET" && url.pathname === "/") {
+		if (
+			request.method === "GET" &&
+			url.pathname === "/"
+		) {
 			return jsonResponse({
 				service: "Dutha AI Daily Standup",
 				status: "running",
@@ -125,7 +136,8 @@ export default {
 		) {
 			return receiveWebhook(request, env);
 		}
-				if (
+
+		if (
 			request.method === "GET" &&
 			url.pathname === "/privacy"
 		) {
@@ -145,6 +157,7 @@ export default {
 		) {
 			return termsOfServiceResponse();
 		}
+
 		if (
 			request.method === "GET" &&
 			url.pathname === "/dashboard"
@@ -156,7 +169,7 @@ export default {
 			{ error: "Not found" },
 			404,
 		);
-		},
+	},
 
 	async scheduled(
 		controller: ScheduledController,
