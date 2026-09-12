@@ -12,7 +12,7 @@
 		"WHATSAPP_TEMPLATE_LANGUAGE": "en_US",
 		"WHATSAPP_INITIAL_TEMPLATE_NAME": "daily_standup_request",
 		"WHATSAPP_REMINDER_TEMPLATE_NAME": "daily_standup_reminder",
-		"AUTOMATION_ENABLED": "false",
+		"AUTOMATION_ENABLED": "true",
 		"DASHBOARD_USERNAME": "admin"
 	},
 	"d1_databases": [
