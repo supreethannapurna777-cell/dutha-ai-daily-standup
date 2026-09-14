@@ -95,6 +95,16 @@ function sameOrigin(
 }
 
 
+function formatStatus(
+        status: string,
+): string {
+        const readable =
+                status.replace(/_/g, " ");
+
+        return readable.charAt(0).toUpperCase()
+                + readable.slice(1);
+}
+
 function htmlResponse(
         html: string,
         status = 200,
@@ -643,8 +653,10 @@ function page(
                                         <strong>Status</strong>
                                         <p>${
                                                 escapeHtml(
-                                                        coordinationCase.status,
-                                                )
+                                                                formatStatus(
+                                                                        coordinationCase.status,
+                                                                ),
+                                                        )
                                         }</p>
                                 </div>
 
@@ -701,21 +713,28 @@ function page(
                                                         })
                                                 </p>
 
-                                                <p>
-                                                        ${
-                                                                escapeHtml(
-                                                                        formatInTimezone(
-                                                                                coordinationCase.proposed_time as string,
-                                                                                coordinationCase.responsible_timezone,
-                                                                        ),
-                                                                )
-                                                        }
-                                                        (${
-                                                                escapeHtml(
-                                                                        coordinationCase.responsible_timezone,
-                                                                )
-                                                        })
-                                                </p>
+                                                ${
+                                                        coordinationCase.requester_timezone
+                                                                !== coordinationCase.responsible_timezone
+                                                                ? `
+                                                                        <p>
+                                                                                ${
+                                                                                        escapeHtml(
+                                                                                                formatInTimezone(
+                                                                                                        coordinationCase.proposed_time as string,
+                                                                                                        coordinationCase.responsible_timezone,
+                                                                                                ),
+                                                                                        )
+                                                                                }
+                                                                                (${
+                                                                                        escapeHtml(
+                                                                                                coordinationCase.responsible_timezone,
+                                                                                        )
+                                                                                })
+                                                                        </p>
+                                                                `
+                                                                : ""
+                                                }
                                         </section>
                                 `
                                 : ""

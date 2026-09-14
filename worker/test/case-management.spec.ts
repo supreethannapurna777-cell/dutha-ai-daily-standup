@@ -272,6 +272,9 @@ describe("manager coordination case controls", () => {
                 expect(html).not.toContain(
                         "919200000000",
                 );
+                expect(html).toContain(
+                        "Pending approval",
+                );
                 expect(html).not.toContain(
                         "Manage availability",
                 );

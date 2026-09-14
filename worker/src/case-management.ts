@@ -97,6 +97,16 @@ function validOrigin(
 }
 
 
+function formatStatus(
+        status: string,
+): string {
+        const readable =
+                status.replace(/_/g, " ");
+
+        return readable.charAt(0).toUpperCase()
+                + readable.slice(1);
+}
+
 function htmlResponse(
         html: string,
         status = 200,
@@ -281,7 +291,9 @@ function caseCard(
                                         <span class="badge status">
                                                 ${
                                                         escapeHtml(
-                                                                coordinationCase.status,
+                                                                formatStatus(
+                                                                        coordinationCase.status,
+                                                                ),
                                                         )
                                                 }
                                         </span>

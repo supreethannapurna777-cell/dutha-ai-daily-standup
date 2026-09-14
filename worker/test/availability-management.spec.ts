@@ -314,6 +314,62 @@ describe("availability management page", () => {
                 );
         });
 
+        it("shows an agreed time once when both members share a timezone", async () => {
+                await env.DB
+                        .prepare(
+                                `
+                                UPDATE team_members
+                                SET timezone = ?
+                                WHERE id = ?
+                                `,
+                        )
+                        .bind(
+                                "Asia/Kolkata",
+                                responsibleId,
+                        )
+                        .run();
+
+                await env.DB
+                        .prepare(
+                                `
+                                UPDATE coordination_cases
+                                SET
+                                        status = ?,
+                                        proposed_time = ?
+                                WHERE id = ?
+                                `,
+                        )
+                        .bind(
+                                "time_agreed",
+                                "2030-01-15T08:30:00.000Z",
+                                caseId,
+                        )
+                        .run();
+
+                const response =
+                        await availabilityManagementResponse(
+                                managementRequest(),
+                                managementEnv,
+                        );
+
+                const html = await response.text();
+
+                expect(response.status).toBe(200);
+                expect(html).toContain(
+                        "Time agreed",
+                );
+                expect(html).not.toContain(
+                        "time_agreed",
+                );
+                expect(
+                        (
+                                html.match(
+                                        /\(Asia\/Kolkata\)/g,
+                                ) ?? []
+                        ).length,
+                ).toBe(1);
+        });
+
         it("creates proposed times in the requester timezone", async () => {
                 const response =
                         await proposeTimes();
