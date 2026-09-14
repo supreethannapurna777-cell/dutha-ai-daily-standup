@@ -100,14 +100,21 @@ async function insertMember(
 
 
 function successfulFetcher() {
-        return vi.fn(async () =>
-                Response.json({
-                        messages: [
-                                {
-                                        id: "wamid.sent",
-                                },
-                        ],
-                }),
+        return vi.fn(
+                async (
+                        _input:
+                                | string
+                                | URL
+                                | Request,
+                        _init?: RequestInit,
+                ): Promise<Response> =>
+                        Response.json({
+                                messages: [
+                                        {
+                                                id: "wamid.sent",
+                                        },
+                                ],
+                        }),
         );
 }
 
@@ -340,9 +347,17 @@ describe("timezone-aware scheduled automation", () => {
                 expect(result.sent).toBe(1);
                 expect(fetcher).toHaveBeenCalledTimes(1);
 
+                const firstCall =
+                        fetcher.mock.calls[0];
+
+                expect(firstCall).toBeDefined();
+
+                const requestOptions =
+                        firstCall?.[1];
+
                 const requestBody = JSON.parse(
                         String(
-                                fetcher.mock.calls[0][1]?.body,
+                                requestOptions?.body,
                         ),
                 );
 
