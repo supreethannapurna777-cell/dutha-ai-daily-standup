@@ -1,4 +1,9 @@
-import { createDashboardResponse } from "./dashboard";
+import {
+        caseManagementResponse,
+} from "./case-management";
+import {
+        createDashboardResponse,
+} from "./dashboard";
 import type { WorkerEnv } from "./env";
 import {
         dataDeletionResponse,
@@ -8,9 +13,15 @@ import {
 import {
         memberManagementResponse,
 } from "./member-management";
-import { verifyMetaSignature } from "./meta-signature";
-import { runScheduledAction } from "./scheduler";
-import { processWebhookPayload } from "./webhook";
+import {
+        verifyMetaSignature,
+} from "./meta-signature";
+import {
+        runScheduledAction,
+} from "./scheduler";
+import {
+        processWebhookPayload,
+} from "./webhook";
 
 export type { WorkerEnv } from "./env";
 
@@ -19,7 +30,10 @@ function jsonResponse(
         body: unknown,
         status = 200,
 ): Response {
-        return Response.json(body, { status });
+        return Response.json(
+                body,
+                { status },
+        );
 }
 
 
@@ -28,13 +42,19 @@ function verifyWebhook(
         env: WorkerEnv,
 ): Response {
         const url = new URL(request.url);
-        const mode = url.searchParams.get("hub.mode");
-        const token = url.searchParams.get(
-                "hub.verify_token",
-        );
-        const challenge = url.searchParams.get(
-                "hub.challenge",
-        );
+
+        const mode =
+                url.searchParams.get("hub.mode");
+
+        const token =
+                url.searchParams.get(
+                        "hub.verify_token",
+                );
+
+        const challenge =
+                url.searchParams.get(
+                        "hub.challenge",
+                );
 
         const isValid =
                 mode === "subscribe"
@@ -79,7 +99,8 @@ async function receiveWebhook(
                 );
         }
 
-        const rawBody = await request.text();
+        const rawBody =
+                await request.text();
 
         const signatureIsValid =
                 await verifyMetaSignature(
@@ -114,19 +135,22 @@ async function receiveWebhook(
                 );
         }
 
-        const result = await processWebhookPayload(
-                payload,
-                env.DB,
-        );
+        const result =
+                await processWebhookPayload(
+                        payload,
+                        env.DB,
+                );
 
         console.log(
                 JSON.stringify({
                         event:
                                 "whatsapp_webhook_processed",
-                        received: result.received,
+                        received:
+                                result.received,
                         duplicates:
                                 result.duplicates,
-                        ignored: result.ignored,
+                        ignored:
+                                result.ignored,
                 }),
         );
 
@@ -143,7 +167,8 @@ export default {
                 env: WorkerEnv,
                 _context: ExecutionContext,
         ): Promise<Response> {
-                const url = new URL(request.url);
+                const url =
+                        new URL(request.url);
 
                 if (
                         request.method === "GET"
@@ -220,6 +245,16 @@ export default {
                         );
                 }
 
+                if (
+                        url.pathname
+                                === "/dashboard/cases"
+                ) {
+                        return caseManagementResponse(
+                                request,
+                                env,
+                        );
+                }
+
                 return jsonResponse(
                         { error: "Not found" },
                         404,
@@ -227,7 +262,8 @@ export default {
         },
 
         async scheduled(
-                controller: ScheduledController,
+                controller:
+                        ScheduledController,
                 env: WorkerEnv,
                 context: ExecutionContext,
         ): Promise<void> {
