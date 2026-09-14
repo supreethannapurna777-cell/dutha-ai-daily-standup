@@ -375,6 +375,52 @@ describe("manager coordination case controls", () => {
                 );
         });
 
+        it("accepts same-origin browser actions without an Origin header", async () => {
+                const body = new URLSearchParams({
+                        case_id: String(caseId),
+                        action: "reject",
+                        manager_notes:
+                                "No meeting required.",
+                });
+
+                const response =
+                        await caseManagementResponse(
+                                new Request(
+                                        "https://example.com/dashboard/cases",
+                                        {
+                                                method: "POST",
+                                                headers: {
+                                                        Authorization:
+                                                                authorisation(),
+                                                        "Content-Type":
+                                                                "application/x-www-form-urlencoded",
+                                                        "Sec-Fetch-Site":
+                                                                "same-origin",
+                                                },
+                                                body,
+                                        },
+                                ),
+                                caseEnv,
+                        );
+
+                expect(response.status).toBe(303);
+
+                const stored = await env.DB
+                        .prepare(
+                                `
+                                SELECT status
+                                FROM coordination_cases
+                                WHERE id = ?
+                                `,
+                        )
+                        .bind(caseId)
+                        .first<{ status: string }>();
+
+                expect(stored?.status).toBe(
+                        "rejected",
+                );
+        });
+
         it("rejects cross-origin manager actions", async () => {
                 const body = new URLSearchParams({
                         case_id: String(caseId),
