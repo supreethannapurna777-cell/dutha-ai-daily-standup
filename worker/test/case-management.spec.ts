@@ -272,6 +272,9 @@ describe("manager coordination case controls", () => {
                 expect(html).not.toContain(
                         "919200000000",
                 );
+                expect(html).not.toContain(
+                        "Manage availability",
+                );
         });
 
         it("allows the manager to approve and assign a case", async () => {
@@ -322,6 +325,22 @@ describe("manager coordination case controls", () => {
                         manager_notes:
                                 "Discuss deployment configuration.",
                 });
+
+                const pageResponse =
+                        await caseManagementResponse(
+                                request(),
+                                caseEnv,
+                        );
+
+                const pageHtml =
+                        await pageResponse.text();
+
+                expect(pageHtml).toContain(
+                        `/dashboard/availability?case=${caseId}`,
+                );
+                expect(pageHtml).toContain(
+                        "Manage availability",
+                );
         });
 
         it("allows the manager to reject a case", async () => {

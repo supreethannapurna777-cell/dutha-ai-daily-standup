@@ -422,6 +422,17 @@ function caseCard(
                         ${
                                 canResolve
                                         ? `
+                                                <div class="actions">
+                                                        <a
+                                                                class="availability-link"
+                                                                href="/dashboard/availability?case=${
+                                                                        coordinationCase.id
+                                                                }"
+                                                        >
+                                                                Manage availability
+                                                        </a>
+                                                </div>
+
                                                 <form method="post">
                                                         <input
                                                                 type="hidden"
@@ -720,6 +731,15 @@ function page(
                         cursor: pointer;
                 }
 
+                .availability-link {
+                        display: inline-block;
+                        color: white;
+                        background: #7c3aed;
+                        border-radius: 8px;
+                        padding: 10px 15px;
+                        font-weight: 700;
+                        text-decoration: none;
+                }
                 .actions {
                         justify-content: flex-start;
                         margin-top: 14px;
