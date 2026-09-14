@@ -13,112 +13,222 @@ export type ScheduledAction =
         | "reminder-2";
 
 
+interface ScheduledTeamMember extends TeamMember {
+        timezone: string;
+        working_days: string;
+        initial_time: string;
+        reminder_1_time: string;
+        reminder_2_time: string;
+}
+
+
+export interface LocalScheduleDetails {
+        date: string;
+        time: string;
+        weekday: string;
+}
+
+
 export interface ScheduleResult {
         status: "completed" | "disabled" | "ignored";
-        action?: ScheduledAction;
         selected: number;
         sent: number;
         failed: number;
 }
 
 
-export function actionForCron(
-        cron: string,
-): ScheduledAction | null {
-        const actions: Record<string, ScheduledAction> = {
-                "30 6 * * MON-FRI": "initial",
-                "30 9 * * MON-FRI": "reminder-1",
-                "30 12 * * MON-FRI": "reminder-2",
-        };
-
-        return actions[cron] ?? null;
-}
+const SCHEDULER_CRON = "*/15 * * * *";
 
 
 export function getIstDate(
         timestamp: number,
 ): string {
-        const istOffsetMilliseconds =
-                5.5 * 60 * 60 * 1000;
-
-        return new Date(
-                timestamp + istOffsetMilliseconds,
-        )
-                .toISOString()
-                .slice(0, 10);
+        return getLocalScheduleDetails(
+                timestamp,
+                "Asia/Kolkata",
+        ).date;
 }
 
 
 export function isIstWeekday(
         timestamp: number,
 ): boolean {
-        const weekday = new Intl.DateTimeFormat(
-                "en-US",
+        const weekday = getLocalScheduleDetails(
+                timestamp,
+                "Asia/Kolkata",
+        ).weekday;
+
+        return weekday !== "SAT" && weekday !== "SUN";
+}
+
+
+export function getLocalScheduleDetails(
+        timestamp: number,
+        timezone: string,
+): LocalScheduleDetails {
+        const formatter = new Intl.DateTimeFormat(
+                "en-CA",
                 {
-                        timeZone: "Asia/Kolkata",
+                        timeZone: timezone,
+                        year: "numeric",
+                        month: "2-digit",
+                        day: "2-digit",
+                        hour: "2-digit",
+                        minute: "2-digit",
                         weekday: "short",
+                        hourCycle: "h23",
                 },
-        ).format(new Date(timestamp));
+        );
 
-        return weekday !== "Sat" && weekday !== "Sun";
+        const parts = formatter.formatToParts(
+                new Date(timestamp),
+        );
+
+        const values = Object.fromEntries(
+                parts.map((part) => [
+                        part.type,
+                        part.value,
+                ]),
+        );
+
+        return {
+                date:
+                        `${values.year}-${values.month}-${values.day}`,
+                time:
+                        `${values.hour}:${values.minute}`,
+                weekday: values.weekday.toUpperCase(),
+        };
 }
 
 
-async function getActiveMembers(
-        db: D1Database,
-): Promise<TeamMember[]> {
-        const result = await db
-                .prepare(
-                        `
-                        SELECT id, name, phone, department
-                        FROM team_members
-                        WHERE active = 1
-                        ORDER BY name
-                        `,
-                )
-                .all<TeamMember>();
+function actionForLocalTime(
+        member: ScheduledTeamMember,
+        localTime: string,
+): ScheduledAction | null {
+        if (localTime === member.initial_time) {
+                return "initial";
+        }
 
-        return result.results;
+        if (localTime === member.reminder_1_time) {
+                return "reminder-1";
+        }
+
+        if (localTime === member.reminder_2_time) {
+                return "reminder-2";
+        }
+
+        return null;
 }
 
 
-async function getPendingMembers(
+function isWorkingDay(
+        member: ScheduledTeamMember,
+        weekday: string,
+): boolean {
+        const workingDays = member.working_days
+                .split(",")
+                .map((day) => day.trim().toUpperCase())
+                .filter(Boolean);
+
+        return workingDays.includes(weekday);
+}
+
+
+async function getScheduledMembers(
         db: D1Database,
-        istDate: string,
-): Promise<TeamMember[]> {
+): Promise<ScheduledTeamMember[]> {
         const result = await db
                 .prepare(
                         `
                         SELECT
-                                member.id,
-                                member.name,
-                                member.phone,
-                                member.department
-                        FROM team_members AS member
-                        WHERE member.active = 1
-                                AND NOT EXISTS (
-                                        SELECT 1
-                                        FROM incoming_messages AS incoming
-                                        WHERE incoming.sender_phone = member.phone
-                                                AND date(
-                                                        incoming.received_at,
-                                                        '+5 hours',
-                                                        '+30 minutes'
-                                                ) = ?
-                                )
-                        ORDER BY member.name
+                                id,
+                                name,
+                                phone,
+                                department,
+                                timezone,
+                                working_days,
+                                initial_time,
+                                reminder_1_time,
+                                reminder_2_time
+                        FROM team_members
+                        WHERE active = 1
+                                AND scheduling_enabled = 1
+                        ORDER BY name
                         `,
                 )
-                .bind(istDate)
-                .all<TeamMember>();
+                .all<ScheduledTeamMember>();
 
         return result.results;
+}
+
+
+async function hasRepliedOnLocalDate(
+        db: D1Database,
+        member: ScheduledTeamMember,
+        localDate: string,
+): Promise<boolean> {
+        const result = await db
+                .prepare(
+                        `
+                        SELECT received_at
+                        FROM incoming_messages
+                        WHERE sender_phone = ?
+                        ORDER BY received_at DESC
+                        LIMIT 20
+                        `,
+                )
+                .bind(member.phone)
+                .all<{ received_at: string }>();
+
+        return result.results.some((message) => {
+                const timestamp = Date.parse(
+                        message.received_at,
+                );
+
+                if (Number.isNaN(timestamp)) {
+                        return false;
+                }
+
+                return getLocalScheduleDetails(
+                        timestamp,
+                        member.timezone,
+                ).date === localDate;
+        });
+}
+
+
+async function wasAlreadySent(
+        db: D1Database,
+        memberId: number,
+        action: ScheduledAction,
+        localDate: string,
+): Promise<boolean> {
+        const existing = await db
+                .prepare(
+                        `
+                        SELECT id
+                        FROM sent_messages
+                        WHERE team_member_id = ?
+                                AND message_type = ?
+                                AND scheduled_for = ?
+                                AND status = 'sent'
+                        LIMIT 1
+                        `,
+                )
+                .bind(
+                        memberId,
+                        action,
+                        localDate,
+                )
+                .first<{ id: number }>();
+
+        return existing !== null;
 }
 
 
 async function recordSendAttempt(
         env: WorkerEnv,
-        member: TeamMember,
+        member: ScheduledTeamMember,
         action: ScheduledAction,
         scheduledFor: string,
         sentAt: string,
@@ -160,9 +270,7 @@ export async function runScheduledAction(
         env: WorkerEnv,
         fetcher: Fetcher = fetch,
 ): Promise<ScheduleResult> {
-        const action = actionForCron(cron);
-
-        if (!action || !isIstWeekday(scheduledTime)) {
+        if (cron !== SCHEDULER_CRON) {
                 return {
                         status: "ignored",
                         selected: 0,
@@ -174,30 +282,80 @@ export async function runScheduledAction(
         if (env.AUTOMATION_ENABLED !== "true") {
                 return {
                         status: "disabled",
-                        action,
                         selected: 0,
                         sent: 0,
                         failed: 0,
                 };
         }
 
-        const istDate = getIstDate(scheduledTime);
+        const members = await getScheduledMembers(
+                env.DB,
+        );
+
         const sentAt = new Date(
                 scheduledTime,
         ).toISOString();
 
-        const members =
-                action === "initial"
-                        ? await getActiveMembers(env.DB)
-                        : await getPendingMembers(
-                                env.DB,
-                                istDate,
-                        );
-
+        let selected = 0;
         let sent = 0;
         let failed = 0;
 
         for (const member of members) {
+                let localSchedule: LocalScheduleDetails;
+
+                try {
+                        localSchedule =
+                                getLocalScheduleDetails(
+                                        scheduledTime,
+                                        member.timezone,
+                                );
+                } catch {
+                        failed += 1;
+                        continue;
+                }
+
+                if (
+                        !isWorkingDay(
+                                member,
+                                localSchedule.weekday,
+                        )
+                ) {
+                        continue;
+                }
+
+                const action = actionForLocalTime(
+                        member,
+                        localSchedule.time,
+                );
+
+                if (!action) {
+                        continue;
+                }
+
+                if (
+                        action !== "initial"
+                        && await hasRepliedOnLocalDate(
+                                env.DB,
+                                member,
+                                localSchedule.date,
+                        )
+                ) {
+                        continue;
+                }
+
+                if (
+                        await wasAlreadySent(
+                                env.DB,
+                                member.id,
+                                action,
+                                localSchedule.date,
+                        )
+                ) {
+                        continue;
+                }
+
+                selected += 1;
+
                 const sendResult =
                         action === "initial"
                                 ? await sendInitialRequest(
@@ -224,7 +382,7 @@ export async function runScheduledAction(
                         env,
                         member,
                         action,
-                        istDate,
+                        localSchedule.date,
                         sentAt,
                         sendResult.success,
                         sendResult.messageId,
@@ -234,8 +392,7 @@ export async function runScheduledAction(
 
         return {
                 status: "completed",
-                action,
-                selected: members.length,
+                selected,
                 sent,
                 failed,
         };
