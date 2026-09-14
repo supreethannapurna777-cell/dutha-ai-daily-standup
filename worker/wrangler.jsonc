@@ -1,32 +1,32 @@
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "dutha-ai-daily-standup",
-	"main": "src/index.ts",
-	"compatibility_date": "2026-09-07",
-	"observability": {
-		"enabled": true
-	},
-	"upload_source_maps": true,
-	"vars": {
-		"WHATSAPP_API_VERSION": "v26.0",
-		"WHATSAPP_TEMPLATE_LANGUAGE": "en_US",
-		"WHATSAPP_INITIAL_TEMPLATE_NAME": "daily_standup_request",
-		"WHATSAPP_REMINDER_TEMPLATE_NAME": "daily_standup_reminder",
-		"AUTOMATION_ENABLED": "true",
-		"DASHBOARD_USERNAME": "admin"
-	},
-	"d1_databases": [
-		{
-			"binding": "DB",
-			"database_name": "dutha-standup-db",
-			"database_id": "ccdeb7a3-4895-4b4d-8b70-e9c9123c8500"
-		}
-	],
-	"triggers": {
-		"crons": [
-			"30 6 * * 1-5",
-			"30 9 * * 1-5",
-			"30 12 * * 1-5"
-		]
-	}
+        "$schema": "node_modules/wrangler/config-schema.json",
+        "name": "dutha-ai-daily-standup",
+        "main": "src/index.ts",
+        "compatibility_date": "2026-09-07",
+        "observability": {
+                "enabled": true
+        },
+        "upload_source_maps": true,
+        "vars": {
+                "WHATSAPP_API_VERSION": "v26.0",
+                "WHATSAPP_TEMPLATE_LANGUAGE": "en_US",
+                "WHATSAPP_INITIAL_TEMPLATE_NAME": "daily_standup_request",
+                "WHATSAPP_REMINDER_TEMPLATE_NAME": "daily_standup_reminder",
+                "AUTOMATION_ENABLED": "true",
+                "DASHBOARD_USERNAME": "admin"
+        },
+        "d1_databases": [
+                {
+                        "binding": "DB",
+                        "database_name": "dutha-standup-db",
+                        "database_id": "ccdeb7a3-4895-4b4d-8b70-e9c9123c8500"
+                }
+        ],
+        "triggers": {
+                "crons": [
+                        "30 6 * * MON-FRI",
+                        "30 9 * * MON-FRI",
+                        "30 12 * * MON-FRI"
+                ]
+        }
 }
