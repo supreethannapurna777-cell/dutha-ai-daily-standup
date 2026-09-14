@@ -80,14 +80,18 @@ function authenticationRequired(): Response {
 function sameOrigin(
         request: Request,
 ): boolean {
+        const expectedOrigin =
+                new URL(request.url).origin;
         const origin =
                 request.headers.get("Origin");
 
-        return Boolean(
-                origin
-                && origin
-                        === new URL(request.url).origin,
-        );
+        if (origin && origin !== "null") {
+                return origin === expectedOrigin;
+        }
+
+        return request.headers.get(
+                "Sec-Fetch-Site",
+        ) === "same-origin";
 }
 
 

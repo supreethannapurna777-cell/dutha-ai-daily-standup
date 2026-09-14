@@ -484,6 +484,40 @@ describe("availability management page", () => {
                 });
         });
 
+        it("accepts same-origin submissions without an Origin header", async () => {
+                const body = new URLSearchParams({
+                        action: "invalid",
+                        case_id: String(caseId),
+                });
+
+                const response =
+                        await availabilityManagementResponse(
+                                new Request(
+                                        `https://example.com/dashboard/availability?case=${caseId}`,
+                                        {
+                                                method: "POST",
+                                                headers: {
+                                                        Authorization:
+                                                                authorisation(),
+                                                        "Content-Type":
+                                                                "application/x-www-form-urlencoded",
+                                                        "Sec-Fetch-Site":
+                                                                "same-origin",
+                                                },
+                                                body,
+                                        },
+                                ),
+                                managementEnv,
+                        );
+
+                expect(response.status).not.toBe(403);
+                expect(
+                        await response.text(),
+                ).not.toContain(
+                        "Invalid request origin.",
+                );
+        });
+
         it("rejects cross-origin submissions", async () => {
                 const body = new URLSearchParams({
                         action: "propose",
