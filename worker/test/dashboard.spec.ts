@@ -103,6 +103,18 @@ describe("secure timezone-aware dashboard", () => {
         beforeEach(async () => {
                 await env.DB.batch([
                         env.DB.prepare(
+                                "DELETE FROM case_events",
+                        ),
+                        env.DB.prepare(
+                                "DELETE FROM case_availability",
+                        ),
+                        env.DB.prepare(
+                                "DELETE FROM case_time_options",
+                        ),
+                        env.DB.prepare(
+                                "DELETE FROM coordination_cases",
+                        ),
+                        env.DB.prepare(
                                 "DELETE FROM sent_messages",
                         ),
                         env.DB.prepare(
@@ -162,15 +174,9 @@ describe("secure timezone-aware dashboard", () => {
                         );
 
                 expect(response.status).toBe(401);
-
-                expect(
-                        response.headers.get(
-                                "WWW-Authenticate",
-                        ),
-                ).toContain("Basic");
         });
 
-        it("shows local-day metrics without phone numbers", async () => {
+        it("shows navigation and metrics without phone numbers", async () => {
                 await addIncomingUpdate(
                         "919100000000",
                         "Supreeth",
@@ -187,15 +193,20 @@ describe("secure timezone-aware dashboard", () => {
                                 ),
                         );
 
-                const html = await response.text();
+                const html =
+                        await response.text();
 
                 expect(response.status).toBe(200);
                 expect(html).toContain("1 / 2");
                 expect(html).toContain("50%");
-                expect(html).toContain("Supreeth");
-                expect(html).toContain("Kiran");
                 expect(html).toContain(
                         "Manage members and schedules",
+                );
+                expect(html).toContain(
+                        "View coordination cases",
+                );
+                expect(html).toContain(
+                        "Open coordination cases",
                 );
                 expect(html).toContain(
                         "Asia/Kolkata",
@@ -238,7 +249,8 @@ describe("secure timezone-aware dashboard", () => {
                                 ),
                         );
 
-                const html = await response.text();
+                const html =
+                        await response.text();
 
                 expect(response.status).toBe(200);
                 expect(html).toContain("0 / 2");

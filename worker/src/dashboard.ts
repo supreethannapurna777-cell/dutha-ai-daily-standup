@@ -35,11 +35,7 @@ function escapeHtml(value: unknown): string {
 function isActiveBlocker(
         value: string | null,
 ): boolean {
-        if (!value) {
-                return false;
-        }
-
-        const normalised = value
+        const normalised = String(value ?? "")
                 .trim()
                 .toLowerCase();
 
@@ -65,14 +61,13 @@ function isAuthorised(
                 return false;
         }
 
-        const expected =
-                `Basic ${btoa(
-                        `${env.DASHBOARD_USERNAME}:`
-                        + env.DASHBOARD_PASSWORD,
-                )}`;
+        const credentials = btoa(
+                `${env.DASHBOARD_USERNAME}:`
+                + env.DASHBOARD_PASSWORD,
+        );
 
         return request.headers.get("Authorization")
-                === expected;
+                === `Basic ${credentials}`;
 }
 
 
@@ -82,35 +77,13 @@ function safeTimezone(
         try {
                 new Intl.DateTimeFormat(
                         "en-US",
-                        {
-                                timeZone: timezone,
-                        },
+                        { timeZone: timezone },
                 ).format(new Date());
 
                 return timezone;
         } catch {
                 return "Asia/Kolkata";
         }
-}
-
-
-function formatReceivedAt(
-        value: string | null,
-        timezone: string,
-): string {
-        if (!value) {
-                return "Pending";
-        }
-
-        return new Date(value).toLocaleString(
-                "en-IN",
-                {
-                        timeZone:
-                                safeTimezone(timezone),
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                },
-        );
 }
 
 
@@ -134,20 +107,38 @@ function respondedOnMemberLocalDate(
                 row.timezone,
         );
 
-        const currentLocalDate =
-                getLocalScheduleDetails(
-                        nowTimestamp,
-                        timezone,
-                ).date;
+        const today = getLocalScheduleDetails(
+                nowTimestamp,
+                timezone,
+        ).date;
 
-        const receivedLocalDate =
+        const responseDate =
                 getLocalScheduleDetails(
                         receivedTimestamp,
                         timezone,
                 ).date;
 
-        return currentLocalDate
-                === receivedLocalDate;
+        return today === responseDate;
+}
+
+
+function formatReceivedAt(
+        value: string | null,
+        timezone: string,
+): string {
+        if (!value) {
+                return "Pending";
+        }
+
+        return new Date(value).toLocaleString(
+                "en-IN",
+                {
+                        timeZone:
+                                safeTimezone(timezone),
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                },
+        );
 }
 
 
@@ -171,7 +162,8 @@ async function getDashboardRows(
                         LEFT JOIN incoming_messages AS incoming
                                 ON incoming.id = (
                                         SELECT candidate.id
-                                        FROM incoming_messages AS candidate
+                                        FROM incoming_messages
+                                                AS candidate
                                         WHERE candidate.sender_phone
                                                 = member.phone
                                         ORDER BY
@@ -191,7 +183,28 @@ async function getDashboardRows(
 }
 
 
-function displayValue(
+async function getOpenCaseCount(
+        db: D1Database,
+): Promise<number> {
+        const result = await db
+                .prepare(
+                        `
+                        SELECT COUNT(*) AS count
+                        FROM coordination_cases
+                        WHERE status NOT IN (
+                                'resolved',
+                                'rejected',
+                                'cancelled'
+                        )
+                        `,
+                )
+                .first<{ count: number }>();
+
+        return result?.count ?? 0;
+}
+
+
+function displayedValue(
         row: PreparedDashboardRow,
         value: string | null,
 ): string {
@@ -231,8 +244,13 @@ export async function createDashboardResponse(
                 );
         }
 
-        const databaseRows =
-                await getDashboardRows(env.DB);
+        const [
+                databaseRows,
+                openCases,
+        ] = await Promise.all([
+                getDashboardRows(env.DB),
+                getOpenCaseCount(env.DB),
+        ]);
 
         const rows: PreparedDashboardRow[] =
                 databaseRows.map((row) => ({
@@ -296,6 +314,7 @@ export async function createDashboardResponse(
                                                         )
                                                 }</small>
                                         </td>
+
                                         <td>
                                                 <span class="badge ${
                                                         responded
@@ -308,28 +327,36 @@ export async function createDashboardResponse(
                                                                         : "Pending"
                                                         }
                                                 </span>
+
                                                 ${
                                                         row.scheduling_enabled
                                                                 ? ""
-                                                                : '<small class="paused">Automation paused</small>'
+                                                                : `
+                                                                        <small class="paused">
+                                                                                Automation paused
+                                                                        </small>
+                                                                `
                                                 }
                                         </td>
+
                                         <td>${
                                                 escapeHtml(
-                                                        displayValue(
+                                                        displayedValue(
                                                                 row,
                                                                 row.tasks,
                                                         ),
                                                 )
                                         }</td>
+
                                         <td>${
                                                 escapeHtml(
-                                                        displayValue(
+                                                        displayedValue(
                                                                 row,
                                                                 row.people_to_connect,
                                                         ),
                                                 )
                                         }</td>
+
                                         <td class="${
                                                 responded
                                                 && isActiveBlocker(
@@ -340,21 +367,23 @@ export async function createDashboardResponse(
                                         }">
                                                 ${
                                                         escapeHtml(
-                                                                displayValue(
+                                                                displayedValue(
                                                                         row,
                                                                         row.blockers,
                                                                 ),
                                                         )
                                                 }
                                         </td>
+
                                         <td>${
                                                 escapeHtml(
-                                                        displayValue(
+                                                        displayedValue(
                                                                 row,
                                                                 row.expected_completion,
                                                         ),
                                                 )
                                         }</td>
+
                                         <td>${
                                                 escapeHtml(
                                                         responded
@@ -362,8 +391,8 @@ export async function createDashboardResponse(
                                                                         row.received_at,
                                                                         timezone,
                                                                 )
-                                                                : "Pending"
-                                                        )
+                                                                : "Pending",
+                                                )
                                         }</td>
                                 </tr>
                         `;
@@ -396,6 +425,7 @@ export async function createDashboardResponse(
                 content="width=device-width, initial-scale=1"
         >
         <title>Dutha WorkOps</title>
+
         <style>
                 :root {
                         font-family: Inter, Arial, sans-serif;
@@ -413,42 +443,52 @@ export async function createDashboardResponse(
                 }
 
                 main {
-                        max-width: 1400px;
+                        max-width: 1450px;
                         margin: auto;
                 }
 
                 .header {
                         display: flex;
-                        align-items: center;
                         justify-content: space-between;
+                        align-items: center;
                         gap: 20px;
                 }
 
                 h1 {
-                        margin-bottom: 4px;
+                        margin: 0 0 5px;
                         color: #173f6b;
                 }
 
                 .subtitle {
                         color: #64748b;
-                        margin-top: 0;
+                        margin: 0;
                 }
 
-                .manage-link {
+                .navigation {
+                        display: flex;
+                        flex-wrap: wrap;
+                        gap: 10px;
+                }
+
+                .navigation a {
                         display: inline-block;
-                        color: white;
-                        background: #1769aa;
                         padding: 11px 15px;
                         border-radius: 9px;
+                        color: white;
+                        background: #1769aa;
                         text-decoration: none;
                         font-weight: 700;
+                }
+
+                .navigation .cases {
+                        background: #7c3aed;
                 }
 
                 .cards {
                         display: grid;
                         grid-template-columns:
-                                repeat(4, minmax(150px, 1fr));
-                        gap: 16px;
+                                repeat(5, minmax(150px, 1fr));
+                        gap: 15px;
                         margin: 24px 0;
                 }
 
@@ -460,7 +500,7 @@ export async function createDashboardResponse(
                 }
 
                 .card {
-                        padding: 20px;
+                        padding: 19px;
                 }
 
                 .label {
@@ -469,10 +509,14 @@ export async function createDashboardResponse(
                 }
 
                 .value {
-                        font-size: 30px;
-                        font-weight: 700;
-                        margin-top: 8px;
+                        margin-top: 7px;
                         color: #173f6b;
+                        font-size: 29px;
+                        font-weight: 700;
+                }
+
+                .case-value {
+                        color: #7c3aed;
                 }
 
                 .table-wrap {
@@ -485,10 +529,10 @@ export async function createDashboardResponse(
                 }
 
                 th {
-                        background: #173f6b;
-                        color: white;
-                        text-align: left;
                         padding: 14px;
+                        color: white;
+                        background: #173f6b;
+                        text-align: left;
                 }
 
                 td {
@@ -499,12 +543,8 @@ export async function createDashboardResponse(
 
                 td small {
                         display: block;
-                        color: #64748b;
                         margin-top: 4px;
-                }
-
-                .paused {
-                        color: #b45309;
+                        color: #64748b;
                 }
 
                 .badge {
@@ -525,6 +565,10 @@ export async function createDashboardResponse(
                         background: #fef3c7;
                 }
 
+                .paused {
+                        color: #b45309;
+                }
+
                 .danger {
                         color: #b91c1c;
                         font-weight: 600;
@@ -541,7 +585,14 @@ export async function createDashboardResponse(
                         font-size: 13px;
                 }
 
-                @media (max-width: 800px) {
+                @media (max-width: 950px) {
+                        .cards {
+                                grid-template-columns:
+                                        repeat(2, 1fr);
+                        }
+                }
+
+                @media (max-width: 700px) {
                         body {
                                 padding: 16px;
                         }
@@ -552,12 +603,12 @@ export async function createDashboardResponse(
                         }
 
                         .cards {
-                                grid-template-columns:
-                                        repeat(2, 1fr);
+                                grid-template-columns: 1fr;
                         }
                 }
         </style>
 </head>
+
 <body>
         <main>
                 <div class="header">
@@ -572,12 +623,20 @@ export async function createDashboardResponse(
                                 </p>
                         </div>
 
-                        <a
-                                class="manage-link"
-                                href="/dashboard/members"
-                        >
-                                Manage members and schedules
-                        </a>
+                        <nav class="navigation">
+                                <a
+                                        href="/dashboard/members"
+                                >
+                                        Manage members and schedules
+                                </a>
+
+                                <a
+                                        class="cases"
+                                        href="/dashboard/cases"
+                                >
+                                        View coordination cases
+                                </a>
+                        </nav>
                 </div>
 
                 <section class="cards">
@@ -616,6 +675,15 @@ export async function createDashboardResponse(
                                         ${blockers}
                                 </div>
                         </div>
+
+                        <div class="card">
+                                <div class="label">
+                                        Open coordination cases
+                                </div>
+                                <div class="value case-value">
+                                        ${openCases}
+                                </div>
+                        </div>
                 </section>
 
                 <div class="table-wrap">
@@ -631,15 +699,17 @@ export async function createDashboardResponse(
                                                 <th>Received at</th>
                                         </tr>
                                 </thead>
-                                <tbody>${tableRows}</tbody>
+
+                                <tbody>
+                                        ${tableRows}
+                                </tbody>
                         </table>
                 </div>
 
                 <footer>
                         Private management dashboard ·
                         Phone numbers are never displayed ·
-                        Each response is evaluated using the
-                        member's configured local date
+                        Responses use each member's configured local date
                 </footer>
         </main>
 </body>
