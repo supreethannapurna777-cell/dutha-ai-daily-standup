@@ -1,4 +1,8 @@
 import type { WorkerEnv } from "./env";
+import {
+        sendTextMessage,
+        type Fetcher,
+} from "./whatsapp";
 
 
 interface CaseRow {
@@ -12,6 +16,8 @@ interface CaseRow {
         status: string;
         priority: string;
         meeting_duration_minutes: number;
+        proposed_time: string | null;
+        meeting_link: string | null;
         manager_notes: string | null;
         requested_at: string;
         updated_at: string;
@@ -155,6 +161,8 @@ async function getCases(
                                 coordination.status,
                                 coordination.priority,
                                 coordination.meeting_duration_minutes,
+                                coordination.proposed_time,
+                                coordination.meeting_link,
                                 coordination.manager_notes,
                                 coordination.requested_at,
                                 coordination.updated_at
@@ -259,6 +267,10 @@ function caseCard(
                 "scheduled",
                 "in_progress",
         ].includes(coordinationCase.status);
+
+        const canSchedule =
+                coordinationCase.status === "time_agreed"
+                && coordinationCase.proposed_time;
 
         return `
                 <article class="case-card">
@@ -433,6 +445,63 @@ function caseCard(
                                                                 </button>
                                                         </div>
                                                 </form>
+                                        `
+                                        : ""
+                        }
+
+                        ${
+                                canSchedule
+                                        ? `
+                                                <form method="post">
+                                                        <input
+                                                                type="hidden"
+                                                                name="case_id"
+                                                                value="${coordinationCase.id}"
+                                                        >
+
+                                                        <label>
+                                                                Meeting link
+                                                                <input
+                                                                        type="url"
+                                                                        name="meeting_link"
+                                                                        value="${escapeHtml(
+                                                                                coordinationCase.meeting_link
+                                                                                        ?? "",
+                                                                        )}"
+                                                                        placeholder="https://teams.microsoft.com/..."
+                                                                        maxlength="2048"
+                                                                        required
+                                                                >
+                                                        </label>
+
+                                                        <button
+                                                                name="action"
+                                                                value="schedule"
+                                                                class="approve"
+                                                        >
+                                                                Save link and notify participants
+                                                        </button>
+                                                </form>
+                                        `
+                                        : ""
+                        }
+
+                        ${
+                                coordinationCase.meeting_link
+                                        && coordinationCase.status === "scheduled"
+                                        ? `
+                                                <div class="notes">
+                                                        <strong>Meeting link:</strong>
+                                                        <a
+                                                                href="${escapeHtml(
+                                                                        coordinationCase.meeting_link,
+                                                                )}"
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                        >
+                                                                Open meeting
+                                                        </a>
+                                                </div>
                                         `
                                         : ""
                         }
@@ -879,6 +948,8 @@ async function renderPage(
                         ? "Coordination case approved."
                         : updated === "rejected"
                                 ? "Coordination case rejected."
+                                : updated === "scheduled"
+                                        ? "Meeting scheduled and participants notified."
                                 : updated === "resolved"
                                         ? "Coordination case resolved."
                                         : null;
@@ -915,6 +986,8 @@ async function getCase(
                                 coordination.status,
                                 coordination.priority,
                                 coordination.meeting_duration_minutes,
+                                coordination.proposed_time,
+                                coordination.meeting_link,
                                 coordination.manager_notes,
                                 coordination.requested_at,
                                 coordination.updated_at
@@ -963,9 +1036,177 @@ async function recordManagerEvent(
 }
 
 
+function validMeetingLink(value: string): boolean {
+        if (!value || value.length > 2048) {
+                return false;
+        }
+
+        try {
+                const url = new URL(value);
+
+                return url.protocol === "https:"
+                        && Boolean(url.hostname)
+                        && !url.username
+                        && !url.password;
+        } catch {
+                return false;
+        }
+}
+
+
+function formatMeetingTime(value: string): string {
+        const date = new Date(value);
+
+        if (Number.isNaN(date.getTime())) {
+                return value;
+        }
+
+        return new Intl.DateTimeFormat(
+                "en-US",
+                {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                        timeZone: "UTC",
+                },
+        ).format(date) + " UTC";
+}
+
+
+async function participantWasNotified(
+        db: D1Database,
+        caseId: number,
+        memberId: number,
+): Promise<boolean> {
+        const event = await db
+                .prepare(
+                        `
+                        SELECT id
+                        FROM case_events
+                        WHERE case_id = ?
+                                AND event_type =
+                                        'meeting_link_notification_sent'
+                                AND actor_member_id = ?
+                        LIMIT 1
+                        `,
+                )
+                .bind(caseId, memberId)
+                .first<{ id: number }>();
+
+        return Boolean(event);
+}
+
+
+async function recordParticipantNotification(
+        db: D1Database,
+        caseId: number,
+        memberId: number,
+): Promise<void> {
+        await db
+                .prepare(
+                        `
+                        INSERT INTO case_events (
+                                case_id,
+                                event_type,
+                                actor_type,
+                                actor_member_id,
+                                details
+                        )
+                        VALUES (
+                                ?,
+                                'meeting_link_notification_sent',
+                                'system',
+                                ?,
+                                'Meeting details sent by WhatsApp'
+                        )
+                        `,
+                )
+                .bind(caseId, memberId)
+                .run();
+}
+
+
+async function notifyParticipants(
+        coordinationCase: CaseRow,
+        meetingLink: string,
+        env: WorkerEnv,
+        fetcher: Fetcher,
+): Promise<string | null> {
+        if (
+                !coordinationCase.responsible_member_id
+                || !coordinationCase.proposed_time
+        ) {
+                return "The case is missing scheduling information.";
+        }
+
+        const participants = await env.DB
+                .prepare(
+                        `
+                        SELECT id, phone
+                        FROM team_members
+                        WHERE id IN (?, ?)
+                        ORDER BY id
+                        `,
+                )
+                .bind(
+                        coordinationCase.requester_member_id,
+                        coordinationCase.responsible_member_id,
+                )
+                .all<{
+                        id: number;
+                        phone: string;
+                }>();
+
+        if (participants.results.length !== 2) {
+                return "Both participants must exist before scheduling.";
+        }
+
+        const message = [
+                "Discussion scheduled",
+                `Case #${coordinationCase.id}`,
+                `Time: ${formatMeetingTime(
+                        coordinationCase.proposed_time,
+                )}`,
+                `Duration: ${coordinationCase.meeting_duration_minutes} minutes`,
+                `Join: ${meetingLink}`,
+        ].join("\n");
+
+        for (const participant of participants.results) {
+                if (
+                        await participantWasNotified(
+                                env.DB,
+                                coordinationCase.id,
+                                participant.id,
+                        )
+                ) {
+                        continue;
+                }
+
+                const result = await sendTextMessage(
+                        env,
+                        participant.phone,
+                        message,
+                        fetcher,
+                );
+
+                if (!result.success) {
+                        return "Meeting link saved, but a WhatsApp notification failed. Submit again to retry.";
+                }
+
+                await recordParticipantNotification(
+                        env.DB,
+                        coordinationCase.id,
+                        participant.id,
+                );
+        }
+
+        return null;
+}
+
+
 async function processDecision(
         form: FormData,
         env: WorkerEnv,
+        fetcher: Fetcher,
 ): Promise<{
         error: string | null;
         redirect: string | null;
@@ -1170,6 +1411,97 @@ async function processDecision(
                 };
         }
 
+        if (action === "schedule") {
+                const meetingLink = String(
+                        form.get("meeting_link") ?? "",
+                ).trim();
+
+                if (
+                        coordinationCase.status === "scheduled"
+                        && coordinationCase.meeting_link === meetingLink
+                ) {
+                        return {
+                                error: null,
+                                redirect: "scheduled",
+                        };
+                }
+
+                if (
+                        coordinationCase.status !== "time_agreed"
+                        || !coordinationCase.proposed_time
+                        || !coordinationCase.responsible_member_id
+                ) {
+                        return {
+                                error:
+                                        "A meeting link can only be added after a common time is agreed.",
+                                redirect: null,
+                        };
+                }
+
+                if (!validMeetingLink(meetingLink)) {
+                        return {
+                                error:
+                                        "Enter a valid HTTPS meeting link.",
+                                redirect: null,
+                        };
+                }
+
+                await env.DB
+                        .prepare(
+                                `
+                                UPDATE coordination_cases
+                                SET
+                                        meeting_link = ?,
+                                        updated_at = CURRENT_TIMESTAMP
+                                WHERE id = ?
+                                        AND status = 'time_agreed'
+                                `,
+                        )
+                        .bind(meetingLink, caseId)
+                        .run();
+
+                const notificationError =
+                        await notifyParticipants(
+                                coordinationCase,
+                                meetingLink,
+                                env,
+                                fetcher,
+                        );
+
+                if (notificationError) {
+                        return {
+                                error: notificationError,
+                                redirect: null,
+                        };
+                }
+
+                await env.DB
+                        .prepare(
+                                `
+                                UPDATE coordination_cases
+                                SET
+                                        status = 'scheduled',
+                                        updated_at = CURRENT_TIMESTAMP
+                                WHERE id = ?
+                                        AND status = 'time_agreed'
+                                `,
+                        )
+                        .bind(caseId)
+                        .run();
+
+                await recordManagerEvent(
+                        env.DB,
+                        caseId,
+                        "meeting_scheduled",
+                        "Meeting link saved and participants notified",
+                );
+
+                return {
+                        error: null,
+                        redirect: "scheduled",
+                };
+        }
+
         if (action === "resolve") {
                 if (
                         ![
@@ -1238,6 +1570,7 @@ async function processDecision(
 export async function caseManagementResponse(
         request: Request,
         env: WorkerEnv,
+        fetcher: Fetcher = fetch,
 ): Promise<Response> {
         if (!isAuthorised(request, env)) {
                 return authenticationRequired();
@@ -1272,6 +1605,7 @@ export async function caseManagementResponse(
                 await processDecision(
                         form,
                         env,
+                        fetcher,
                 );
 
         if (decision.error) {

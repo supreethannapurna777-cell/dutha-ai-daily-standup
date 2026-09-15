@@ -4,6 +4,7 @@ import {
         describe,
         expect,
         it,
+        vi,
 } from "vitest";
 
 import {
@@ -16,6 +17,9 @@ const caseEnv = {
         ...env,
         DASHBOARD_USERNAME: "admin",
         DASHBOARD_PASSWORD: "test-password",
+        WHATSAPP_API_VERSION: "v26.0",
+        WHATSAPP_ACCESS_TOKEN: "test-token",
+        WHATSAPP_PHONE_NUMBER_ID: "123456789",
 } as WorkerEnv;
 
 
@@ -376,6 +380,227 @@ describe("manager coordination case controls", () => {
                 expect(stored?.status).toBe(
                         "rejected",
                 );
+        });
+
+        it("saves a meeting link and notifies both participants once", async () => {
+                await env.DB
+                        .prepare(
+                                `
+                                UPDATE coordination_cases
+                                SET
+                                        status = 'time_agreed',
+                                        proposed_time = ?
+                                WHERE id = ?
+                                `,
+                        )
+                        .bind(
+                                "2030-01-15T08:30:00.000Z",
+                                caseId,
+                        )
+                        .run();
+
+                const pageResponse =
+                        await caseManagementResponse(
+                                request(),
+                                caseEnv,
+                        );
+
+                const pageHtml =
+                        await pageResponse.text();
+
+                expect(pageHtml).toContain(
+                        "Save link and notify participants",
+                );
+
+                const fetcher = vi.fn(async () =>
+                        Response.json({
+                                messages: [{ id: "wamid.meeting" }],
+                        }),
+                );
+
+                const meetingLink =
+                        "https://teams.microsoft.com/l/meetup-join/test";
+                const body = new URLSearchParams({
+                        case_id: String(caseId),
+                        action: "schedule",
+                        meeting_link: meetingLink,
+                });
+
+                const firstResponse =
+                        await caseManagementResponse(
+                                request("POST", body),
+                                caseEnv,
+                                fetcher,
+                        );
+
+                expect(firstResponse.status).toBe(303);
+                expect(fetcher).toHaveBeenCalledTimes(2);
+
+                const stored = await env.DB
+                        .prepare(
+                                `
+                                SELECT status, meeting_link
+                                FROM coordination_cases
+                                WHERE id = ?
+                                `,
+                        )
+                        .bind(caseId)
+                        .first<{
+                                status: string;
+                                meeting_link: string;
+                        }>();
+
+                expect(stored).toEqual({
+                        status: "scheduled",
+                        meeting_link: meetingLink,
+                });
+
+                const sentEvents = await env.DB
+                        .prepare(
+                                `
+                                SELECT COUNT(*) AS count
+                                FROM case_events
+                                WHERE case_id = ?
+                                        AND event_type =
+                                                'meeting_link_notification_sent'
+                                `,
+                        )
+                        .bind(caseId)
+                        .first<{ count: number }>();
+
+                expect(sentEvents?.count).toBe(2);
+
+                const secondResponse =
+                        await caseManagementResponse(
+                                request("POST", body),
+                                caseEnv,
+                                fetcher,
+                        );
+
+                expect(secondResponse.status).toBe(303);
+                expect(fetcher).toHaveBeenCalledTimes(2);
+        });
+
+        it("rejects an unsafe meeting link", async () => {
+                await env.DB
+                        .prepare(
+                                `
+                                UPDATE coordination_cases
+                                SET
+                                        status = 'time_agreed',
+                                        proposed_time = ?
+                                WHERE id = ?
+                                `,
+                        )
+                        .bind(
+                                "2030-01-15T08:30:00.000Z",
+                                caseId,
+                        )
+                        .run();
+
+                const fetcher = vi.fn();
+                const response =
+                        await caseManagementResponse(
+                                request(
+                                        "POST",
+                                        new URLSearchParams({
+                                                case_id: String(caseId),
+                                                action: "schedule",
+                                                meeting_link:
+                                                        "javascript:alert(1)",
+                                        }),
+                                ),
+                                caseEnv,
+                                fetcher,
+                        );
+
+                expect(response.status).toBe(400);
+                expect(await response.text()).toContain(
+                        "Enter a valid HTTPS meeting link.",
+                );
+                expect(fetcher).not.toHaveBeenCalled();
+        });
+
+        it("retries only the participant whose notification failed", async () => {
+                await env.DB
+                        .prepare(
+                                `
+                                UPDATE coordination_cases
+                                SET
+                                        status = 'time_agreed',
+                                        proposed_time = ?
+                                WHERE id = ?
+                                `,
+                        )
+                        .bind(
+                                "2030-01-15T08:30:00.000Z",
+                                caseId,
+                        )
+                        .run();
+
+                const fetcher = vi.fn()
+                        .mockResolvedValueOnce(
+                                Response.json({
+                                        messages: [{ id: "wamid.first" }],
+                                }),
+                        )
+                        .mockResolvedValueOnce(
+                                Response.json(
+                                        {
+                                                error: {
+                                                        message:
+                                                                "Temporary failure",
+                                                },
+                                        },
+                                        { status: 500 },
+                                ),
+                        )
+                        .mockResolvedValueOnce(
+                                Response.json({
+                                        messages: [{ id: "wamid.retry" }],
+                                }),
+                        );
+
+                const body = () =>
+                        new URLSearchParams({
+                                case_id: String(caseId),
+                                action: "schedule",
+                                meeting_link:
+                                        "https://meet.google.com/abc-defg-hij",
+                        });
+
+                const failedResponse =
+                        await caseManagementResponse(
+                                request("POST", body()),
+                                caseEnv,
+                                fetcher,
+                        );
+
+                expect(failedResponse.status).toBe(400);
+                expect(fetcher).toHaveBeenCalledTimes(2);
+
+                const retryResponse =
+                        await caseManagementResponse(
+                                request("POST", body()),
+                                caseEnv,
+                                fetcher,
+                        );
+
+                expect(retryResponse.status).toBe(303);
+                expect(fetcher).toHaveBeenCalledTimes(3);
+
+                const stored = await env.DB
+                        .prepare(
+                                `
+                                SELECT status
+                                FROM coordination_cases
+                                WHERE id = ?
+                                `,
+                        )
+                        .bind(caseId)
+                        .first<{ status: string }>();
+
+                expect(stored?.status).toBe("scheduled");
         });
 
         it("accepts same-origin browser actions without an Origin header", async () => {
