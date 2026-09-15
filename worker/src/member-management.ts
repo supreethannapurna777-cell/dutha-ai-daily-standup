@@ -109,13 +109,18 @@ function htmlResponse(
 function validateSameOrigin(
         request: Request,
 ): boolean {
-        const origin = request.headers.get("Origin");
+        const expectedOrigin =
+                new URL(request.url).origin;
+        const origin =
+                request.headers.get("Origin");
 
-        if (!origin) {
-                return false;
+        if (origin && origin !== "null") {
+                return origin === expectedOrigin;
         }
 
-        return origin === new URL(request.url).origin;
+        return request.headers.get(
+                "Sec-Fetch-Site",
+        ) === "same-origin";
 }
 
 

@@ -324,6 +324,40 @@ describe("member schedule management", () => {
                 );
         });
 
+        it("accepts same-origin changes without an Origin header", async () => {
+                const response =
+                        await memberManagementResponse(
+                                new Request(
+                                        "https://example.com/dashboard/members",
+                                        {
+                                                method:
+                                                        "POST",
+                                                headers: {
+                                                        Authorization:
+                                                                authorisationHeader(),
+                                                        "Content-Type":
+                                                                "application/x-www-form-urlencoded",
+                                                        "Sec-Fetch-Site":
+                                                                "same-origin",
+                                                },
+                                                body:
+                                                        new URLSearchParams({
+                                                                action:
+                                                                        "invalid",
+                                                        }),
+                                        },
+                                ),
+                                managementEnv,
+                        );
+
+                expect(response.status).not.toBe(403);
+                expect(
+                        await response.text(),
+                ).not.toContain(
+                        "Invalid request origin.",
+                );
+        });
+
         it("rejects cross-origin changes", async () => {
                 const response =
                         await memberManagementResponse(
