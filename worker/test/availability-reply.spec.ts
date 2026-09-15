@@ -4,6 +4,7 @@ import {
         describe,
         expect,
         it,
+        vi,
 } from "vitest";
 
 import {
@@ -341,11 +342,17 @@ describe("WhatsApp availability replies", () => {
                 const coordinationCase =
                         await createAvailabilityCase();
 
+                const replySender = vi.fn(async () => ({
+                        success: true,
+                }));
+
                 const result = await processWebhookPayload(
                         availabilityPayload(
                                 coordinationCase.id,
                         ),
                         env.DB,
+                        new Date(),
+                        replySender,
                 );
 
                 expect(result).toEqual({
@@ -380,5 +387,57 @@ describe("WhatsApp availability replies", () => {
                         "availability_processed",
                 );
                 expect(processedCount?.count).toBe(1);
+                expect(replySender).toHaveBeenCalledWith(
+                        "919100000000",
+                        expect.stringContaining(
+                                "Availability saved",
+                        ),
+                );
+        });
+
+        it("sends a correction for an invalid WhatsApp selection", async () => {
+                const coordinationCase =
+                        await createAvailabilityCase();
+                const replySender = vi.fn(async () => ({
+                        success: true,
+                }));
+                const payload = availabilityPayload(
+                        coordinationCase.id,
+                );
+
+                payload.entry[0].changes[0]
+                        .value.messages[0].text.body =
+                                `CASE ${coordinationCase.id}: 9`;
+
+                await processWebhookPayload(
+                        payload,
+                        env.DB,
+                        new Date(),
+                        replySender,
+                );
+
+                expect(replySender).toHaveBeenCalledWith(
+                        "919100000000",
+                        expect.stringContaining(
+                                "Availability was not saved",
+                        ),
+                );
+
+                const incoming = await env.DB
+                        .prepare(
+                                `
+                                SELECT processing_status
+                                FROM incoming_messages
+                                WHERE whatsapp_message_id = ?
+                                `,
+                        )
+                        .bind("wamid.availability")
+                        .first<{
+                                processing_status: string;
+                        }>();
+
+                expect(incoming?.processing_status).toBe(
+                        "availability_rejected",
+                );
         });
 });

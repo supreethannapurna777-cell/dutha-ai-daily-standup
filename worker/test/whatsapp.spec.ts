@@ -10,6 +10,7 @@ import {
 	sendAvailabilityRequest,
 	sendInitialRequest,
 	sendReminder,
+	sendTextMessage,
 	type TeamMember,
 } from "../src/whatsapp";
 
@@ -37,6 +38,37 @@ const testEnv = {
 
 
 describe("WhatsApp template sending", () => {
+	it("sends a free-form confirmation message", async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json({
+				messages: [{ id: "wamid.text-001" }],
+			}),
+		);
+
+		const result = await sendTextMessage(
+			testEnv,
+			member.phone,
+			"Availability saved.",
+			fetcher,
+		);
+
+		expect(result).toEqual({
+			success: true,
+			messageId: "wamid.text-001",
+		});
+
+		const payload = JSON.parse(
+			String(fetcher.mock.calls[0][1]?.body),
+		);
+
+		expect(payload.type).toBe("text");
+		expect(payload.to).toBe("919100000000");
+		expect(payload.text).toEqual({
+			preview_url: false,
+			body: "Availability saved.",
+		});
+	});
+
 	it("sends numbered availability options", async () => {
 		const fetcher = vi.fn(async () =>
 			Response.json({

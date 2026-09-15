@@ -27,6 +27,15 @@ export interface WebhookResult {
 }
 
 
+export type AvailabilityReplySender = (
+        recipient: string,
+        text: string,
+) => Promise<{
+        success: boolean;
+        error?: string;
+}>;
+
+
 function timestampToIso(
         timestamp: unknown,
         fallback: Date,
@@ -227,10 +236,84 @@ async function markAvailabilityReply(
 }
 
 
+function availabilityConfirmation(
+        success: boolean,
+        matched: boolean,
+        error: string | undefined,
+): string {
+        if (!success) {
+                return "Availability was not saved. "
+                        + (
+                                error
+                                ?? "Check the case and option numbers."
+                        )
+                        + " Reply using: CASE <number>: 1,3";
+        }
+
+        if (matched) {
+                return "Availability saved. A common discussion time "
+                        + "has been matched automatically. The manager "
+                        + "can now confirm the meeting details.";
+        }
+
+        return "Availability saved. Waiting for the other participant "
+                + "or a common discussion time.";
+}
+
+
+async function safelySendAvailabilityConfirmation(
+        sender: AvailabilityReplySender | undefined,
+        recipient: string,
+        success: boolean,
+        matched: boolean,
+        error: string | undefined,
+): Promise<void> {
+        if (!sender) {
+                return;
+        }
+
+        try {
+                const result = await sender(
+                        recipient,
+                        availabilityConfirmation(
+                                success,
+                                matched,
+                                error,
+                        ),
+                );
+
+                if (!result.success) {
+                        console.error(
+                                JSON.stringify({
+                                        event:
+                                                "availability_confirmation_failed",
+                                        error:
+                                                result.error
+                                                ?? "Unknown WhatsApp error",
+                                }),
+                        );
+                }
+        } catch (sendError) {
+                console.error(
+                        JSON.stringify({
+                                event:
+                                        "availability_confirmation_failed",
+                                error:
+                                        sendError instanceof Error
+                                                ? sendError.message
+                                                : "Unknown WhatsApp error",
+                        }),
+                );
+        }
+}
+
+
 export async function processWebhookPayload(
         payload: unknown,
         db: D1Database,
         now = new Date(),
+        availabilityReplySender?:
+                AvailabilityReplySender,
 ): Promise<WebhookResult> {
         const result: WebhookResult = {
                 received: 0,
@@ -446,6 +529,14 @@ export async function processWebhookPayload(
                                                 db,
                                                 stored.id,
                                                 availabilityReply.success,
+                                        );
+
+                                        await safelySendAvailabilityConfirmation(
+                                                availabilityReplySender,
+                                                senderPhone,
+                                                availabilityReply.success,
+                                                availabilityReply.matched,
+                                                availabilityReply.error,
                                         );
 
                                         console.log(

@@ -22,6 +22,57 @@ export type Fetcher = (
 ) => Promise<Response>;
 
 
+async function responseToSendResult(
+	response: Response,
+): Promise<SendResult> {
+	let responseBody: Record<string, unknown> = {};
+
+	try {
+		responseBody =
+			await response.json() as Record<string, unknown>;
+	} catch {
+		responseBody = {};
+	}
+
+	if (!response.ok) {
+		const errorObject =
+			typeof responseBody.error === "object" &&
+			responseBody.error !== null
+				? responseBody.error as Record<string, unknown>
+				: {};
+
+		return {
+			success: false,
+			error:
+				typeof errorObject.message === "string"
+					? errorObject.message
+					: `WhatsApp API HTTP ${response.status}`,
+		};
+	}
+
+	const messages = Array.isArray(responseBody.messages)
+		? responseBody.messages
+		: [];
+	const firstMessage = messages[0];
+
+	const messageId =
+		typeof firstMessage === "object" &&
+		firstMessage !== null &&
+		typeof (
+			firstMessage as Record<string, unknown>
+		).id === "string"
+			? (
+					firstMessage as Record<string, string>
+				).id
+			: undefined;
+
+	return {
+		success: true,
+		messageId,
+	};
+}
+
+
 export function normalisePhone(phone: string): string {
 	return phone.replace(/\D/g, "");
 }
@@ -84,51 +135,55 @@ export async function sendTemplateMessage(
 		},
 	);
 
-		let responseBody: Record<string, unknown> = {};
+	return responseToSendResult(response);
+}
 
-	try {
-		responseBody =
-			await response.json() as Record<string, unknown>;
-	} catch {
-		responseBody = {};
-	}
 
-	if (!response.ok) {
-		const errorObject =
-			typeof responseBody.error === "object" &&
-			responseBody.error !== null
-				? responseBody.error as Record<string, unknown>
-				: {};
+export async function sendTextMessage(
+	env: WorkerEnv,
+	recipient: string,
+	text: string,
+	fetcher: Fetcher = fetch,
+): Promise<SendResult> {
+	const phone = normalisePhone(recipient);
+	const body = text.trim();
 
+	if (
+		!env.WHATSAPP_ACCESS_TOKEN ||
+		!env.WHATSAPP_PHONE_NUMBER_ID ||
+		!phone ||
+		!body
+	) {
 		return {
 			success: false,
-			error:
-				typeof errorObject.message === "string"
-					? errorObject.message
-					: `WhatsApp API HTTP ${response.status}`,
+			error: "Missing WhatsApp configuration or message text",
 		};
 	}
 
-	const messages = Array.isArray(responseBody.messages)
-		? responseBody.messages
-		: [];
-	const firstMessage = messages[0];
+	const response = await fetcher(
+		`https://graph.facebook.com/${env.WHATSAPP_API_VERSION}` +
+			`/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+		{
+			method: "POST",
+			headers: {
+				Authorization:
+					`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				messaging_product: "whatsapp",
+				recipient_type: "individual",
+				to: phone,
+				type: "text",
+				text: {
+					preview_url: false,
+					body,
+				},
+			}),
+		},
+	);
 
-	const messageId =
-		typeof firstMessage === "object" &&
-		firstMessage !== null &&
-		typeof (
-			firstMessage as Record<string, unknown>
-		).id === "string"
-			? (
-					firstMessage as Record<string, string>
-				).id
-			: undefined;
-
-	return {
-		success: true,
-		messageId,
-	};
+	return responseToSendResult(response);
 }
 
 

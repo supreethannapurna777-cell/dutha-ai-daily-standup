@@ -25,6 +25,9 @@ import {
 import {
         processWebhookPayload,
 } from "./webhook";
+import {
+        sendTextMessage,
+} from "./whatsapp";
 
 export type { WorkerEnv } from "./env";
 
@@ -130,6 +133,13 @@ async function receiveWebhook(
                 await processWebhookPayload(
                         payload,
                         env.DB,
+                        new Date(),
+                        (recipient, text) =>
+                                sendTextMessage(
+                                        env,
+                                        recipient,
+                                        text,
+                                ),
                 );
 
         console.log(
