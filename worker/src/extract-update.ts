@@ -74,6 +74,11 @@ export function extractUpdate(
 			}
 		}
 	} else {
+		const sentences = text
+			.split(/(?<=[.!?])\s+|\n+/)
+			.map((sentence) => sentence.trim())
+			.filter(Boolean);
+
 		const taskMatch = text.match(
 			/(?:today\s+i\s+will|i\s+will\s+work\s+on)\s+(.+?)(?:\.|\n|$)/i,
 		);
@@ -82,25 +87,66 @@ export function extractUpdate(
 			tasks = taskMatch[1].trim();
 		}
 
-		const peopleMatch = text.match(
-			/(?:coordinate\s+with|connect\s+with|with)\s+([a-zA-Z][a-zA-Z ]+?)(?:\.|\n|$)/i,
+		const explicitPeopleMatch = text.match(
+			/(?:coordinate\s+with|connect\s+with)\s+([a-zA-Z][a-zA-Z ]+?)(?:\.|,|\n|$)/i,
 		);
 
-		if (peopleMatch) {
-			peopleToConnect = peopleMatch[1].trim();
-		}
+		const blockerSentences = sentences.filter((sentence) => {
+			const value = sentence.toLowerCase();
+			const isResolved =
+				value.includes("blocker is resolved")
+				|| value.includes("blocker was resolved")
+				|| value.includes("no longer blocked")
+				|| value.includes("resolved now");
+			const isHypothetical =
+				/\b(?:might|may|could)\s+be\s+blocked\b/i.test(sentence)
+				|| /\bif\b.+\b(?:will|would)\s+be\s+blocked\b/i.test(sentence);
+			const hasPositiveBlocker =
+				/\b(?:i\s+am|i'm|we\s+are|we're)\s+blocked\s+(?:because|by|on)\b/i.test(sentence)
+				|| /\b(?:cannot|can't|unable\s+to)\s+(?:continue|proceed|complete|test|deploy)\b/i.test(sentence)
+				|| /\bwaiting\s+for\b/i.test(sentence)
+				|| /\bblocker\s*(?:is|:)\s*/i.test(sentence);
 
-		if (
-			lowerText.includes("no blocker") ||
-			lowerText.includes("no dependency")
+			return hasPositiveBlocker && !isResolved && !isHypothetical;
+		});
+
+		if (blockerSentences.length > 0) {
+			blockers = blockerSentences.join(" ");
+			dependencies = blockers;
+		} else if (
+			/\bno\s+(?:(?:current|active|additional|other)\s+)?blockers?\b/i.test(text)
+			|| lowerText.includes("no dependency")
+			|| lowerText.includes("blocker is resolved")
+			|| lowerText.includes("no longer blocked")
+			|| lowerText.includes("resolved now")
 		) {
 			blockers = "None mentioned";
 			dependencies = "None mentioned";
 		}
 
-		const completionMatch = text.match(
-			/(?:expected\s+completion(?:\s+time)?|complete)\s*(?:is|by|:)?\s*(.+?)(?:\.|\n|$)/i,
+		const blockerText = blockerSentences.join(" ");
+		const inferredPeopleMatch = blockerText.match(
+			/\b(?:because|by|from|waiting\s+for)\s+([A-Z][a-z]+)(?=\s+(?:has|hasn't|did|needs|must|is|was|will|to)\b)/,
 		);
+		const peopleMatch = explicitPeopleMatch ?? inferredPeopleMatch;
+
+		if (peopleMatch) {
+			peopleToConnect = peopleMatch[1].trim();
+		}
+
+		const durationMatch = text.match(
+			/\b(?:need|require)\s+((?:approximately|about|around)?\s*(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:minutes?|hours?|days?))\b/i,
+		);
+		const explicitCompletionMatch = text.match(
+			/\bexpected\s+completion(?:\s+time)?\s*(?:is|:)?\s*(.+?)(?:\.|\n|$)/i,
+		);
+		const deadlineMatch = text.match(
+			/\b(?:expect(?:ed)?\s+to\s+)?(?:complete|finish)\b.+?\bby\s+(.+?)(?:\.|\n|$)/i,
+		);
+		const completionMatch =
+			durationMatch
+			?? explicitCompletionMatch
+			?? deadlineMatch;
 
 		if (completionMatch) {
 			expectedCompletion = completionMatch[1].trim();

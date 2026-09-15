@@ -66,4 +66,42 @@ describe("extractUpdate", () => {
 		expect(result.tasks).toBe("Not specified");
 		expect(result.original_reply).toBe(reply);
 	});
+
+	it("extracts a natural-language blocker, owner, task and duration", () => {
+		const reply = "Yesterday I completed the Prometheus target verification and corrected two monitoring alerts. Today I will connect the Git repository to ArgoCD and begin the deployment configuration. I am blocked because Kiran has not yet shared the repository URL and required access. Once I receive them, I need approximately two hours to complete the connection.";
+
+		expect(extractUpdate(reply)).toEqual({
+			tasks: "connect the Git repository to ArgoCD and begin the deployment configuration",
+			people_to_connect: "Kiran",
+			blockers: "I am blocked because Kiran has not yet shared the repository URL and required access.",
+			dependencies: "I am blocked because Kiran has not yet shared the repository URL and required access.",
+			expected_completion: "approximately two hours",
+			original_reply: reply,
+		});
+	});
+
+	it("does not treat completed as an expected-completion marker", () => {
+		const result = extractUpdate(
+			"Yesterday I completed monitoring. Today I will test alerts.",
+		);
+
+		expect(result.expected_completion).toBe("Not specified");
+	});
+
+	it("does not create an active blocker from resolved language", () => {
+		const result = extractUpdate(
+			"I was initially blocked, but the blocker is resolved now. No additional blocker currently.",
+		);
+
+		expect(result.blockers).toBe("None mentioned");
+		expect(result.dependencies).toBe("None mentioned");
+	});
+
+	it("does not promote a hypothetical risk to an active blocker", () => {
+		const result = extractUpdate(
+			"If the old API fails, I will be blocked.",
+		);
+
+		expect(result.blockers).toBe("Not specified");
+	});
 });
