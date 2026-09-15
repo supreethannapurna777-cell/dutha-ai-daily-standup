@@ -166,3 +166,25 @@ export function sendReminder(
 		fetcher,
 	);
 }
+
+
+export function sendAvailabilityRequest(
+	env: WorkerEnv,
+	member: TeamMember,
+	caseId: number,
+	optionsText: string,
+	fetcher: Fetcher = fetch,
+): Promise<SendResult> {
+	return sendTemplateMessage(
+		env,
+		member.phone,
+		env.WHATSAPP_AVAILABILITY_TEMPLATE_NAME,
+		[
+			member.name,
+			String(caseId),
+			optionsText,
+			String(caseId),
+		],
+		fetcher,
+	);
+}

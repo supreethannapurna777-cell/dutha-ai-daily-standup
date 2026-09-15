@@ -4,8 +4,12 @@ import {
         describe,
         expect,
         it,
+        vi,
 } from "vitest";
 
+import {
+        sendCaseAvailabilityRequests,
+} from "../src/availability-notifications";
 import {
         availabilityManagementResponse,
 } from "../src/availability-management";
@@ -421,6 +425,111 @@ describe("availability management page", () => {
                 expect(storedCase?.status).toBe(
                         "availability_requested",
                 );
+        });
+
+        it("sends numbered options once to both participants", async () => {
+                await proposeTimes();
+
+                const configuredEnv = {
+                        ...managementEnv,
+                        WHATSAPP_API_VERSION: "v26.0",
+                        WHATSAPP_TEMPLATE_LANGUAGE: "en_US",
+                        WHATSAPP_ACCESS_TOKEN:
+                                "private-test-token",
+                        WHATSAPP_PHONE_NUMBER_ID:
+                                "123456789",
+                        WHATSAPP_AVAILABILITY_TEMPLATE_NAME:
+                                "coordination_availability_request",
+                } as WorkerEnv;
+
+                let sequence = 0;
+                const fetcher = vi.fn(async (
+                        _input: RequestInfo | URL,
+                        _init?: RequestInit,
+                ) => {
+                        sequence += 1;
+
+                        return Response.json({
+                                messages: [
+                                        {
+                                                id:
+                                                        `wamid.availability-${sequence}`,
+                                        },
+                                ],
+                        });
+                });
+
+                const first =
+                        await sendCaseAvailabilityRequests(
+                                configuredEnv,
+                                caseId,
+                                fetcher,
+                                new Date(
+                                        "2030-01-14T08:00:00.000Z",
+                                ),
+                        );
+
+                expect(first).toEqual({
+                        attempted: 2,
+                        sent: 2,
+                        failed: 0,
+                        skipped: 0,
+                });
+                expect(fetcher).toHaveBeenCalledTimes(2);
+
+                const payloads = fetcher.mock.calls.map(
+                        ([, request]) =>
+                                JSON.parse(
+                                        String(request?.body),
+                                ),
+                );
+
+                expect(payloads[0].to).toBe(
+                        "919100000000",
+                );
+                expect(payloads[1].to).toBe(
+                        "447700900000",
+                );
+                expect(
+                        payloads[0].template.components[0]
+                                .parameters[2].text,
+                ).toContain("1.");
+                expect(
+                        payloads[0].template.components[0]
+                                .parameters[2].text,
+                ).not.toBe(
+                        payloads[1].template.components[0]
+                                .parameters[2].text,
+                );
+
+                const second =
+                        await sendCaseAvailabilityRequests(
+                                configuredEnv,
+                                caseId,
+                                fetcher,
+                        );
+
+                expect(second).toEqual({
+                        attempted: 0,
+                        sent: 0,
+                        failed: 0,
+                        skipped: 2,
+                });
+                expect(fetcher).toHaveBeenCalledTimes(2);
+
+                const sentCount = await env.DB
+                        .prepare(
+                                `
+                                SELECT COUNT(*) AS count
+                                FROM sent_messages
+                                WHERE message_type
+                                        = 'availability_request'
+                                        AND status = 'sent'
+                                `,
+                        )
+                        .first<{ count: number }>();
+
+                expect(sentCount?.count).toBe(2);
         });
 
         it("matches the earliest option selected by both members", async () => {

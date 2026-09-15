@@ -2,6 +2,9 @@ import {
         proposeCaseTimes,
         recordMemberAvailability,
 } from "./availability";
+import {
+        sendCaseAvailabilityRequests,
+} from "./availability-notifications";
 import type { WorkerEnv } from "./env";
 import {
         getLocalScheduleDetails,
@@ -822,14 +825,14 @@ function page(
                                 ? `
                                         <section class="panel">
                                                 <h2>
-                                                        Pilot availability collection
+                                                        Availability collection
                                                 </h2>
 
                                                 <p>
-                                                        These manager-assisted
-                                                        controls will later be
-                                                        replaced by WhatsApp
-                                                        selection messages.
+                                                        Members can reply through
+                                                        WhatsApp. These controls
+                                                        remain available as a
+                                                        manager fallback.
                                                 </p>
 
                                                 <div class="people">
@@ -892,7 +895,11 @@ async function renderPage(
                         .get("updated");
 
         const message =
-                updated === "proposed"
+                updated === "proposed_notified"
+                        ? "Discussion times created and WhatsApp requests sent."
+                        : updated === "proposed_notification_failed"
+                                ? "Discussion times were created, but one or more WhatsApp requests failed. Manager controls remain available."
+                        : updated === "proposed"
                         ? "Discussion times created."
                         : updated === "availability"
                                 ? "Availability saved."
@@ -1020,6 +1027,28 @@ export async function availabilityManagementResponse(
                         );
                 }
 
+                let update = "proposed";
+
+                if (result.created > 0) {
+                        const notification =
+                                await sendCaseAvailabilityRequests(
+                                        env,
+                                        caseId,
+                                );
+
+                        if (
+                                notification.sent === 2
+                                && notification.failed === 0
+                        ) {
+                                update = "proposed_notified";
+                        } else if (
+                                notification.failed > 0
+                        ) {
+                                update =
+                                        "proposed_notification_failed";
+                        }
+                }
+
                 return new Response(
                         null,
                         {
@@ -1028,7 +1057,7 @@ export async function availabilityManagementResponse(
                                         Location:
                                                 `/dashboard/availability`
                                                 + `?case=${caseId}`
-                                                + "&updated=proposed",
+                                                + `&updated=${update}`,
                                 },
                         },
                 );

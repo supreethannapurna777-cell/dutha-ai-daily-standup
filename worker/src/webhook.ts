@@ -2,6 +2,9 @@ import {
         createCoordinationCase,
 } from "./coordination";
 import {
+        processAvailabilityReply,
+} from "./availability-reply";
+import {
         extractUpdate,
         type ExtractedUpdate,
 } from "./extract-update";
@@ -198,6 +201,29 @@ async function safelyCreateCoordinationCase(
                         }),
                 );
         }
+}
+
+
+async function markAvailabilityReply(
+        db: D1Database,
+        messageId: number,
+        success: boolean,
+): Promise<void> {
+        await db
+                .prepare(
+                        `
+                        UPDATE incoming_messages
+                        SET processing_status = ?
+                        WHERE id = ?
+                        `,
+                )
+                .bind(
+                        success
+                                ? "availability_processed"
+                                : "availability_rejected",
+                        messageId,
+                )
+                .run();
 }
 
 
@@ -405,6 +431,37 @@ export async function processWebhookPayload(
 
                                 if (!stored) {
                                         result.duplicates += 1;
+                                        continue;
+                                }
+
+                                const availabilityReply =
+                                        await processAvailabilityReply(
+                                                db,
+                                                senderPhone,
+                                                text,
+                                        );
+
+                                if (availabilityReply.handled) {
+                                        await markAvailabilityReply(
+                                                db,
+                                                stored.id,
+                                                availabilityReply.success,
+                                        );
+
+                                        console.log(
+                                                JSON.stringify({
+                                                        event:
+                                                                "availability_reply_processed",
+                                                        success:
+                                                                availabilityReply.success,
+                                                        matched:
+                                                                availabilityReply.matched,
+                                                        error:
+                                                                availabilityReply.error,
+                                                }),
+                                        );
+
+                                        result.received += 1;
                                         continue;
                                 }
 

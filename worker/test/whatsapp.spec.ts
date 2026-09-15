@@ -7,6 +7,7 @@ import {
 
 import type { WorkerEnv } from "../src/env";
 import {
+	sendAvailabilityRequest,
 	sendInitialRequest,
 	sendReminder,
 	type TeamMember,
@@ -28,12 +29,52 @@ const testEnv = {
 		"daily_standup_request",
 	WHATSAPP_REMINDER_TEMPLATE_NAME:
 		"daily_standup_reminder",
+	WHATSAPP_AVAILABILITY_TEMPLATE_NAME:
+		"coordination_availability_request",
 	WHATSAPP_ACCESS_TOKEN: "private-test-token",
 	WHATSAPP_PHONE_NUMBER_ID: "123456789",
 } as WorkerEnv;
 
 
 describe("WhatsApp template sending", () => {
+	it("sends numbered availability options", async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json({
+				messages: [{ id: "wamid.availability-001" }],
+			}),
+		);
+
+		const result = await sendAvailabilityRequest(
+			testEnv,
+			member,
+			42,
+			"1. 15 Jan 2030, 1:00 pm\n2. 15 Jan 2030, 2:00 pm",
+			fetcher,
+		);
+
+		expect(result.success).toBe(true);
+
+		const payload = JSON.parse(
+			String(fetcher.mock.calls[0][1]?.body),
+		);
+
+		expect(payload.template.name).toBe(
+			"coordination_availability_request",
+		);
+		expect(
+			payload.template.components[0]
+				.parameters.map(
+					(parameter: { text: string }) =>
+						parameter.text,
+				),
+		).toEqual([
+			"Supreeth",
+			"42",
+			"1. 15 Jan 2030, 1:00 pm\n2. 15 Jan 2030, 2:00 pm",
+			"42",
+		]);
+	});
+
 	it("sends an initial template to a normalised phone", async () => {
 		const fetcher = vi.fn(async () =>
 			Response.json({
