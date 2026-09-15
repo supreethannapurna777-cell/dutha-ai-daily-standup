@@ -262,4 +262,65 @@ describe("secure timezone-aware dashboard", () => {
                         "Deploy &lt;script&gt;",
                 );
         });
+
+        it("shows earlier updates in the seven-day history", async () => {
+                await addIncomingUpdate(
+                        "919100000000",
+                        "Supreeth",
+                        "wamid.history",
+                        "2026-09-09T06:45:00.000Z",
+                );
+
+                const response = await createDashboardResponse(
+                        new Request(
+                                "https://example.com/dashboard?view=history&period=7",
+                                { headers: authorisedRequest().headers },
+                        ),
+                        dashboardEnv,
+                        new Date("2026-09-11T09:00:00.000Z"),
+                );
+                const html = await response.text();
+
+                expect(response.status).toBe(200);
+                expect(html).toContain("Update history");
+                expect(html).toContain("Test reply");
+                expect(html).toContain("Expected completion");
+                expect(html).not.toContain("919100000000");
+        });
+
+        it("supports yesterday and member filters", async () => {
+                await addIncomingUpdate(
+                        "919100000000", "Supreeth", "wamid.yesterday",
+                        "2026-09-10T06:45:00.000Z",
+                );
+                await addIncomingUpdate(
+                        "919200000000", "Kiran", "wamid.today",
+                        "2026-09-11T06:45:00.000Z",
+                );
+
+                const response = await createDashboardResponse(
+                        new Request(
+                                "https://example.com/dashboard?view=history&period=yesterday&member=Supreeth",
+                                { headers: authorisedRequest().headers },
+                        ),
+                        dashboardEnv,
+                        new Date("2026-09-11T09:00:00.000Z"),
+                );
+                const html = await response.text();
+
+                expect(html).toContain("Yesterday");
+                expect(html).toContain("Supreeth");
+                expect(html.match(/<tr>/g)).toHaveLength(2);
+        });
+
+        it("labels response and expected completion clearly", async () => {
+                const response = await createDashboardResponse(
+                        authorisedRequest(), dashboardEnv,
+                        new Date("2026-09-11T09:00:00.000Z"),
+                );
+                const html = await response.text();
+                expect(html).toContain("Response completion");
+                expect(html).toContain("Expected completion");
+                expect(html).toContain("View update history");
+        });
 });

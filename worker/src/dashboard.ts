@@ -21,6 +21,10 @@ interface PreparedDashboardRow extends DashboardRow {
         respondedToday: boolean;
 }
 
+interface HistoryRow extends DashboardRow {
+        original_reply: string | null;
+}
+
 
 function escapeHtml(value: unknown): string {
         return String(value ?? "")
@@ -203,6 +207,96 @@ async function getOpenCaseCount(
         return result?.count ?? 0;
 }
 
+async function getHistoryRows(db: D1Database): Promise<HistoryRow[]> {
+        const result = await db.prepare(`
+                SELECT member.name, member.department, member.timezone,
+                        member.scheduling_enabled, incoming.received_at,
+                        processed.tasks, processed.people_to_connect,
+                        processed.blockers, processed.expected_completion,
+                        COALESCE(processed.original_reply, incoming.original_reply)
+                                AS original_reply
+                FROM incoming_messages AS incoming
+                INNER JOIN team_members AS member
+                        ON member.phone = incoming.sender_phone
+                LEFT JOIN processed_updates AS processed
+                        ON processed.message_id = incoming.id
+                WHERE member.active = 1
+                        AND incoming.processing_status = 'processed'
+                ORDER BY incoming.received_at DESC
+                LIMIT 500
+        `).all<HistoryRow>();
+        return result.results;
+}
+
+function validDate(value: string | null): value is string {
+        return Boolean(value && /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
+
+function dayNumber(value: string): number {
+        return Math.floor(Date.parse(`${value}T00:00:00.000Z`) / 86_400_000);
+}
+
+function historyIncludes(
+        row: HistoryRow,
+        nowTimestamp: number,
+        period: string,
+        from: string | null,
+        to: string | null,
+): boolean {
+        if (!row.received_at) return false;
+        const receivedTimestamp = Date.parse(row.received_at);
+        if (Number.isNaN(receivedTimestamp)) return false;
+        const timezone = safeTimezone(row.timezone);
+        const rowDate = getLocalScheduleDetails(receivedTimestamp, timezone).date;
+        if (period === "custom" && validDate(from) && validDate(to)) {
+                return rowDate >= from && rowDate <= to;
+        }
+        const today = getLocalScheduleDetails(nowTimestamp, timezone).date;
+        const age = dayNumber(today) - dayNumber(rowDate);
+        if (period === "yesterday") return age === 1;
+        if (period === "30") return age >= 0 && age < 30;
+        return age >= 0 && age < 7;
+}
+
+function historyResponse(rows: HistoryRow[], request: Request, now: Date): Response {
+        const url = new URL(request.url);
+        const requestedPeriod = url.searchParams.get("period") ?? "7";
+        const period = ["yesterday", "7", "30", "custom"].includes(requestedPeriod)
+                ? requestedPeriod : "7";
+        const from = url.searchParams.get("from");
+        const to = url.searchParams.get("to");
+        const member = (url.searchParams.get("member") ?? "").trim();
+        const members = [...new Set(rows.map((row) => row.name))]
+                .sort((left, right) => left.localeCompare(right));
+        const filtered = rows.filter((row) =>
+                (!member || row.name === member)
+                && historyIncludes(row, now.getTime(), period, from, to),
+        );
+        const activeBlockers = filtered.filter((row) => isActiveBlocker(row.blockers)).length;
+        const memberOptions = members.map((name) =>
+                `<option value="${escapeHtml(name)}"${name === member ? " selected" : ""}>${escapeHtml(name)}</option>`,
+        ).join("");
+        const tableRows = filtered.length ? filtered.map((row) => `
+                <tr><td>${escapeHtml(formatReceivedAt(row.received_at, row.timezone))}<small>${escapeHtml(safeTimezone(row.timezone))}</small></td>
+                <td><strong>${escapeHtml(row.name)}</strong><small>${escapeHtml(row.department)}</small></td>
+                <td>${escapeHtml(row.tasks || "Not specified")}</td><td>${escapeHtml(row.people_to_connect || "Not specified")}</td>
+                <td class="${isActiveBlocker(row.blockers) ? "danger" : ""}">${escapeHtml(row.blockers || "Not specified")}</td>
+                <td>${escapeHtml(row.expected_completion || "Not specified")}</td><td class="reply">${escapeHtml(row.original_reply || "Not available")}</td></tr>`,
+        ).join("") : `<tr><td colspan="7" class="empty">No updates match this period and member.</td></tr>`;
+        const title = period === "yesterday" ? "Yesterday" : period === "30" ? "Last 30 days" : period === "custom" ? "Custom range" : "Last 7 days";
+        const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dutha update history</title><style>
+:root{font-family:Inter,Arial,sans-serif;color:#172033;background:#f4f7fb}*{box-sizing:border-box}body{margin:0;padding:32px}main{max-width:1500px;margin:auto}.header{display:flex;justify-content:space-between;align-items:center;gap:20px}h1{margin:0;color:#173f6b}.subtitle,small{color:#64748b}.nav{display:flex;gap:9px;flex-wrap:wrap}.nav a,.nav button{border:0;border-radius:9px;padding:11px 15px;color:#fff;background:#1769aa;text-decoration:none;font-weight:700;cursor:pointer}.nav .logout{background:#475569}.filters,.summary,.table-wrap{background:#fff;border-radius:12px;box-shadow:0 3px 14px #0f172a12}.filters{display:flex;align-items:end;gap:12px;flex-wrap:wrap;padding:18px;margin:24px 0 15px}.filters label{display:grid;gap:6px;font-size:13px;font-weight:700}.filters select,.filters input{padding:10px;border:1px solid #cbd5e1;border-radius:8px}.filters button{padding:11px 18px;border:0;border-radius:8px;background:#7c3aed;color:#fff;font-weight:700}.summary{display:flex;gap:28px;padding:16px 20px;margin-bottom:15px}.summary strong{font-size:23px;color:#173f6b}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:1200px}th{padding:13px;background:#173f6b;color:#fff;text-align:left}td{padding:13px;border-bottom:1px solid #e5eaf1;vertical-align:top;max-width:300px}td small{display:block;margin-top:4px}.danger{color:#b91c1c;font-weight:600}.reply{white-space:pre-wrap}.empty{text-align:center;color:#64748b}footer{margin-top:16px;color:#64748b;font-size:13px}@media(max-width:700px){body{padding:16px}.header{align-items:start;flex-direction:column}}
+</style></head><body><main><div class="header"><div><h1>Update history</h1><p class="subtitle">${escapeHtml(title)} · each response shown in the member's local time</p></div><nav class="nav"><a href="/dashboard">Today</a><a href="/dashboard/members">Members</a><a href="/dashboard/cases">Cases</a><form method="post" action="/logout"><button class="logout">Sign out</button></form></nav></div>
+<form class="filters" method="get" action="/dashboard"><input type="hidden" name="view" value="history"><label>Period<select name="period"><option value="yesterday"${period === "yesterday" ? " selected" : ""}>Yesterday</option><option value="7"${period === "7" ? " selected" : ""}>Last 7 days</option><option value="30"${period === "30" ? " selected" : ""}>Last 30 days</option><option value="custom"${period === "custom" ? " selected" : ""}>Custom dates</option></select></label><label>From<input type="date" name="from" value="${escapeHtml(validDate(from) ? from : "")}"></label><label>To<input type="date" name="to" value="${escapeHtml(validDate(to) ? to : "")}"></label><label>Member<select name="member"><option value="">All members</option>${memberOptions}</select></label><button type="submit">Apply filters</button></form>
+<section class="summary"><div><small>Updates</small><br><strong>${filtered.length}</strong></div><div><small>Active blockers reported</small><br><strong>${activeBlockers}</strong></div></section>
+<div class="table-wrap"><table><thead><tr><th>Received</th><th>Member</th><th>Tasks</th><th>Coordination</th><th>Blockers</th><th>Expected completion</th><th>Original reply</th></tr></thead><tbody>${tableRows}</tbody></table></div><footer>Private management history · Phone numbers are never displayed · Up to 500 recent processed updates</footer></main></body></html>`;
+        return new Response(html, { status: 200, headers: {
+                "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY",
+                "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        }});
+}
+
 
 function displayedValue(
         row: PreparedDashboardRow,
@@ -241,6 +335,14 @@ export async function createDashboardResponse(
                                                 'Basic realm="Dutha WorkOps Dashboard"',
                                 },
                         },
+                );
+        }
+
+        if (new URL(request.url).searchParams.get("view") === "history") {
+                return historyResponse(
+                        await getHistoryRows(env.DB),
+                        request,
+                        now,
                 );
         }
 
@@ -484,6 +586,17 @@ export async function createDashboardResponse(
                         background: #7c3aed;
                 }
 
+                .navigation button {
+                        padding: 11px 15px;
+                        border: 0;
+                        border-radius: 9px;
+                        color: white;
+                        background: #475569;
+                        font: inherit;
+                        font-weight: 700;
+                        cursor: pointer;
+                }
+
                 .cards {
                         display: grid;
                         grid-template-columns:
@@ -636,6 +749,14 @@ export async function createDashboardResponse(
                                 >
                                         View coordination cases
                                 </a>
+
+                                <a href="/dashboard?view=history&amp;period=7">
+                                        View update history
+                                </a>
+
+                                <form method="post" action="/logout">
+                                        <button type="submit">Sign out</button>
+                                </form>
                         </nav>
                 </div>
 
@@ -651,7 +772,7 @@ export async function createDashboardResponse(
 
                         <div class="card">
                                 <div class="label">
-                                        Completion
+                                        Response completion
                                 </div>
                                 <div class="value">
                                         ${completion}%
@@ -695,7 +816,7 @@ export async function createDashboardResponse(
                                                 <th>Tasks</th>
                                                 <th>Coordination</th>
                                                 <th>Blockers</th>
-                                                <th>Completion</th>
+                                                <th>Expected completion</th>
                                                 <th>Received at</th>
                                         </tr>
                                 </thead>

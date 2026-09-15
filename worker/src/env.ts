@@ -11,5 +11,6 @@ export interface WorkerEnv {
 	AUTOMATION_ENABLED: string;
     DASHBOARD_USERNAME: string;
     DASHBOARD_PASSWORD: string;
+    DASHBOARD_SESSION_SECRET?: string;
     WHATSAPP_APP_SECRET: string;
 }

@@ -28,6 +28,11 @@ import {
 import {
         sendTextMessage,
 } from "./whatsapp";
+import {
+        authenticatedManagementRequest,
+        loginResponse,
+        logoutResponse,
+} from "./auth";
 
 export type { WorkerEnv } from "./env";
 
@@ -223,12 +228,39 @@ export default {
                         return termsOfServiceResponse();
                 }
 
+                if (url.pathname === "/login") {
+                        return loginResponse(request, env);
+                }
+
+                if (url.pathname === "/logout") {
+                        if (request.method !== "POST") {
+                                return new Response("Method not allowed", { status: 405 });
+                        }
+                        return logoutResponse();
+                }
+
+                let managementRequest = request;
+                if (url.pathname.startsWith("/dashboard")) {
+                        const authenticated = await authenticatedManagementRequest(request, env);
+                        if (!authenticated) {
+                                if (request.method === "GET") {
+                                        const next = url.pathname + url.search;
+                                        return Response.redirect(
+                                                `${url.origin}/login?next=${encodeURIComponent(next)}`,
+                                                302,
+                                        );
+                                }
+                                return new Response("Authentication required.", { status: 401 });
+                        }
+                        managementRequest = authenticated;
+                }
+
                 if (
                         request.method === "GET"
                         && url.pathname === "/dashboard"
                 ) {
                         return createDashboardResponse(
-                                request,
+                                managementRequest,
                                 env,
                         );
                 }
@@ -238,7 +270,7 @@ export default {
                                 === "/dashboard/members"
                 ) {
                         return memberManagementResponse(
-                                request,
+                                managementRequest,
                                 env,
                         );
                 }
@@ -248,7 +280,7 @@ export default {
                                 === "/dashboard/cases"
                 ) {
                         return caseManagementResponse(
-                                request,
+                                managementRequest,
                                 env,
                         );
                 }
@@ -258,7 +290,7 @@ export default {
                                 === "/dashboard/availability"
                 ) {
                         return availabilityManagementResponse(
-                                request,
+                                managementRequest,
                                 env,
                         );
                 }
