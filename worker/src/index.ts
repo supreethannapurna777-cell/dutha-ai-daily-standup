@@ -41,6 +41,7 @@ import {
         loginResponse,
         logoutResponse,
 } from "./auth";
+import { projectManagementResponse } from "./project-management";
 
 export type { WorkerEnv } from "./env";
 
@@ -324,6 +325,10 @@ export default {
                                 managementRequest,
                                 env,
                         );
+                }
+
+                if (url.pathname === "/dashboard/projects") {
+                        return projectManagementResponse(managementRequest, env);
                 }
 
                 return jsonResponse(

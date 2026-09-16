@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './env';
-import { managementPrincipalFromRequest, requireProjectAccess } from './access-control';
+import { accessibleProjects, managementPrincipalFromRequest, requireProjectAccess } from './access-control';
 import { getLocalScheduleDetails } from './scheduler';
 
 interface DashboardRow {
@@ -247,7 +247,7 @@ function historyIncludes(row: HistoryRow, nowTimestamp: number, period: string, 
 	return age >= 0 && age < 7;
 }
 
-function historyResponse(rows: HistoryRow[], request: Request, now: Date): Response {
+function historyResponse(rows: HistoryRow[], request: Request, now: Date, projectId: number): Response {
 	const url = new URL(request.url);
 	const requestedPeriod = url.searchParams.get('period') ?? '7';
 	const period = ['yesterday', '7', '30', 'custom'].includes(requestedPeriod) ? requestedPeriod : '7';
@@ -276,7 +276,7 @@ function historyResponse(rows: HistoryRow[], request: Request, now: Date): Respo
 		period === 'yesterday' ? 'Yesterday' : period === '30' ? 'Last 30 days' : period === 'custom' ? 'Custom range' : 'Last 7 days';
 	const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dutha update history</title><style>
 :root{font-family:Inter,Arial,sans-serif;color:#172033;background:#f4f7fb}*{box-sizing:border-box}body{margin:0;padding:32px}main{max-width:1500px;margin:auto}.header{display:flex;justify-content:space-between;align-items:center;gap:20px}h1{margin:0;color:#173f6b}.subtitle,small{color:#64748b}.nav{display:flex;gap:9px;flex-wrap:wrap}.nav a,.nav button{border:0;border-radius:9px;padding:11px 15px;color:#fff;background:#1769aa;text-decoration:none;font-weight:700;cursor:pointer}.nav .logout{background:#475569}.filters,.summary,.table-wrap{background:#fff;border-radius:12px;box-shadow:0 3px 14px #0f172a12}.filters{display:flex;align-items:end;gap:12px;flex-wrap:wrap;padding:18px;margin:24px 0 15px}.filters label{display:grid;gap:6px;font-size:13px;font-weight:700}.filters select,.filters input{padding:10px;border:1px solid #cbd5e1;border-radius:8px}.filters button{padding:11px 18px;border:0;border-radius:8px;background:#7c3aed;color:#fff;font-weight:700}.summary{display:flex;gap:28px;padding:16px 20px;margin-bottom:15px}.summary strong{font-size:23px;color:#173f6b}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:1200px}th{padding:13px;background:#173f6b;color:#fff;text-align:left}td{padding:13px;border-bottom:1px solid #e5eaf1;vertical-align:top;max-width:300px}td small{display:block;margin-top:4px}.danger{color:#b91c1c;font-weight:600}.reply{white-space:pre-wrap}.empty{text-align:center;color:#64748b}footer{margin-top:16px;color:#64748b;font-size:13px}@media(max-width:700px){body{padding:16px}.header{align-items:start;flex-direction:column}}
-</style></head><body><main><div class="header"><div><h1>Update history</h1><p class="subtitle">${escapeHtml(title)} · each response shown in the member's local time</p></div><nav class="nav"><a href="/dashboard">Today</a><a href="/dashboard/members">Members</a><a href="/dashboard/cases">Cases</a><form method="post" action="/logout"><button class="logout">Sign out</button></form></nav></div>
+</style></head><body><main><div class="header"><div><h1>Update history</h1><p class="subtitle">${escapeHtml(title)} · each response shown in the member's local time</p></div><nav class="nav"><a href="/dashboard?project=${projectId}">Today</a><a href="/dashboard/members?project=${projectId}">Members</a><a href="/dashboard/cases?project=${projectId}">Cases</a><form method="post" action="/logout"><button class="logout">Sign out</button></form></nav></div>
 <form class="filters" method="get" action="/dashboard"><input type="hidden" name="view" value="history"><label>Period<select name="period"><option value="yesterday"${period === 'yesterday' ? ' selected' : ''}>Yesterday</option><option value="7"${period === '7' ? ' selected' : ''}>Last 7 days</option><option value="30"${period === '30' ? ' selected' : ''}>Last 30 days</option><option value="custom"${period === 'custom' ? ' selected' : ''}>Custom dates</option></select></label><label>From<input type="date" name="from" value="${escapeHtml(validDate(from) ? from : '')}"></label><label>To<input type="date" name="to" value="${escapeHtml(validDate(to) ? to : '')}"></label><label>Member<select name="member"><option value="">All members</option>${memberOptions}</select></label><button type="submit">Apply filters</button></form>
 <section class="summary"><div><small>Updates</small><br><strong>${filtered.length}</strong></div><div><small>Active blockers reported</small><br><strong>${activeBlockers}</strong></div></section>
 <div class="table-wrap"><table><thead><tr><th>Received</th><th>Member</th><th>Tasks</th><th>Coordination</th><th>Blockers</th><th>Expected completion</th><th>Original reply</th></tr></thead><tbody>${tableRows}</tbody></table></div><footer>Private management history · Phone numbers are never displayed · Up to 500 recent processed updates</footer></main></body></html>`;
@@ -330,9 +330,15 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 	} catch {
 		return new Response('Project access denied.', { status: 403 });
 	}
+	const projects = await accessibleProjects(env.DB, principal);
+	const projectOptions = projects.map((project) => `
+		<option value="${project.id}" ${project.id === requestedProject ? 'selected' : ''}>
+			${escapeHtml(project.project_key)} · ${escapeHtml(project.name)}
+		</option>
+	`).join('');
 
 	if (new URL(request.url).searchParams.get('view') === 'history') {
-		return historyResponse(await getHistoryRows(env.DB, principal.tenantId, requestedProject), request, now);
+		return historyResponse(await getHistoryRows(env.DB, principal.tenantId, requestedProject), request, now, requestedProject);
 	}
 
 	const [databaseRows, openCases, voiceCounts] = await Promise.all([
@@ -639,20 +645,28 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                         </div>
 
                         <nav class="navigation">
+                                <form method="get" action="/dashboard">
+                                        <select name="project" aria-label="Select project">
+                                                ${projectOptions}
+                                        </select>
+                                        <button type="submit">Open project</button>
+                                </form>
+
+                                ${principal.role === 'admin' ? '<a href="/dashboard/projects">Projects and access</a>' : ''}
                                 <a
-                                        href="/dashboard/members"
+                                        href="/dashboard/members?project=${requestedProject}"
                                 >
                                         Manage members and schedules
                                 </a>
 
                                 <a
                                         class="cases"
-                                        href="/dashboard/cases"
+                                        href="/dashboard/cases?project=${requestedProject}"
                                 >
                                         View coordination cases
                                 </a>
 
-                                <a href="/dashboard?view=history&amp;period=7">
+                                <a href="/dashboard?view=history&amp;period=7&amp;project=${requestedProject}">
                                         View update history
                                 </a>
 
