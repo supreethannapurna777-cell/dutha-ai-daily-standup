@@ -31,6 +31,7 @@ import {
 import {
         acceptVoiceUpdate,
         createCloudflareVoiceTranscriber,
+        createCloudflareVoiceExtractor,
         defaultVoiceSender,
         processVoiceUpdate,
         retryFailedVoiceUpdates,
@@ -168,10 +169,12 @@ async function receiveWebhook(
                                                 id,
                                                 createCloudflareVoiceTranscriber(env),
                                                 defaultVoiceSender(env),
+                                                createCloudflareVoiceExtractor(env),
                                         ),
                                 );
                                 return true;
                         },
+                        createCloudflareVoiceExtractor(env),
                 );
 
         console.log(

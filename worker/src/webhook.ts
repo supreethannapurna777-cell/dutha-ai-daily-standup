@@ -11,6 +11,7 @@ import {
 import {
         processVoiceReply,
         type IncomingVoiceMessage,
+        type VoiceStructuredExtractor,
 } from "./voice-update";
 
 
@@ -324,6 +325,7 @@ export async function processWebhookPayload(
         availabilityReplySender?:
                 AvailabilityReplySender,
         voiceMessageReceiver?: VoiceMessageReceiver,
+        voiceExtractor?: VoiceStructuredExtractor,
 ): Promise<WebhookResult> {
         const result: WebhookResult = {
                 received: 0,
@@ -557,6 +559,7 @@ export async function processWebhookPayload(
                                         messageId,
                                         text,
                                         availabilityReplySender,
+                                        voiceExtractor,
                                 );
 
                                 if (voiceReply.handled) {

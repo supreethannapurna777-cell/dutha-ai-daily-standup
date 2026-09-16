@@ -9,6 +9,7 @@ import {
 
 import {
         acceptVoiceUpdate,
+        createCloudflareVoiceExtractor,
         createCloudflareVoiceTranscriber,
         processVoiceReply,
         processVoiceUpdate,
@@ -259,6 +260,47 @@ describe("WhatsApp voice updates", () => {
                                 audio: expect.any(String),
                                 task: "transcribe",
                                 vad_filter: true,
+                        }),
+                );
+        });
+
+        it("uses structured AI extraction for a natural spoken update", async () => {
+                const run = vi.fn().mockResolvedValue({
+                        response: JSON.stringify({
+                                tasks: "Deploy the application and test the voice workflow",
+                                people_to_connect: "Imran",
+                                blockers: "Database access credentials are pending",
+                                dependencies: "Database access credentials from Imran",
+                                expected_completion: "6 PM today",
+                        }),
+                });
+                const extractor = createCloudflareVoiceExtractor({
+                        AI: { run },
+                } as WorkerEnv);
+                const transcript = [
+                        "Today I am deploying the application and testing the voice workflow.",
+                        "I need to coordinate with Imran.",
+                        "I am blocked because database access credentials are pending.",
+                        "I expect to finish by 6 PM today.",
+                ].join(" ");
+
+                const result = await extractor(transcript);
+
+                expect(result).toEqual({
+                        tasks: "Deploy the application and test the voice workflow",
+                        people_to_connect: "Imran",
+                        blockers: "Database access credentials are pending",
+                        dependencies: "Database access credentials from Imran",
+                        expected_completion: "6 PM today",
+                        original_reply: transcript,
+                });
+                expect(run).toHaveBeenCalledWith(
+                        "@cf/ibm-granite/granite-4.0-h-micro",
+                        expect.objectContaining({
+                                response_format: expect.objectContaining({
+                                        type: "json_object",
+                                }),
+                                temperature: 0,
                         }),
                 );
         });

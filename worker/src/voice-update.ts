@@ -44,6 +44,11 @@ export type VoiceTranscriber = (
 ) => Promise<VoiceTranscription>;
 
 
+export type VoiceStructuredExtractor = (
+        transcript: string,
+) => Promise<ExtractedUpdate>;
+
+
 export type VoiceConfirmationSender = (
         recipient: string,
         text: string,
@@ -138,6 +143,8 @@ export async function processVoiceUpdate(
         voiceUpdateId: number,
         transcriber: VoiceTranscriber,
         sender: VoiceConfirmationSender,
+        extractor: VoiceStructuredExtractor = async (text) =>
+                extractUpdate(text),
 ): Promise<void> {
         const voice = await db.prepare(`
                 SELECT id, media_id, mime_type, sender_phone
@@ -172,7 +179,7 @@ export async function processVoiceUpdate(
                         throw new Error("The voice note did not contain recognisable speech.");
                 }
 
-                const extracted = extractUpdate(transcript);
+                const extracted = await extractor(transcript);
                 const sent = await sender(
                         voice.sender_phone,
                         confirmationText(extracted),
@@ -341,6 +348,8 @@ export async function processVoiceReply(
         replyMessageId: string,
         text: string,
         sender?: VoiceConfirmationSender,
+        extractor: VoiceStructuredExtractor = async (value) =>
+                extractUpdate(value),
 ): Promise<VoiceReplyResult> {
         if (await eventAlreadyHandled(db, replyMessageId)) {
                 return {
@@ -393,7 +402,7 @@ export async function processVoiceReply(
         }
 
         const correction = correctionMatch[1].trim();
-        const extracted = extractUpdate(correction);
+        const extracted = await extractor(correction);
         await db.batch([
                 db.prepare(`
                         INSERT INTO voice_update_events (
@@ -523,6 +532,115 @@ export function defaultVoiceSender(
 ): VoiceConfirmationSender {
         return (recipient, text) =>
                 sendTextMessage(env, recipient, text);
+}
+
+
+function parsedStructuredUpdate(
+        transcript: string,
+        response: string,
+): ExtractedUpdate {
+        const match = response.match(/\{[\s\S]*\}/);
+        if (!match) {
+                throw new Error("Structured extraction returned no JSON object.");
+        }
+
+        const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+        const field = (
+                name: string,
+                fallback = "Not specified",
+        ): string => {
+                const value = parsed[name];
+                return typeof value === "string" && value.trim()
+                        ? value.trim()
+                        : fallback;
+        };
+
+        return {
+                tasks: field("tasks"),
+                people_to_connect: field("people_to_connect"),
+                blockers: field("blockers", "None mentioned"),
+                dependencies: field("dependencies", "None mentioned"),
+                expected_completion: field("expected_completion"),
+                original_reply: transcript,
+        };
+}
+
+
+export function createCloudflareVoiceExtractor(
+        env: WorkerEnv,
+): VoiceStructuredExtractor {
+        return async (transcript) => {
+                if (!env.AI) {
+                        return extractUpdate(transcript);
+                }
+
+                try {
+                        const result = await env.AI.run(
+                                "@cf/ibm-granite/granite-4.0-h-micro",
+                                {
+                                        messages: [
+                                                {
+                                                        role: "system",
+                                                        content: [
+                                                                "Extract a spoken employee status update into JSON.",
+                                                                "Return only these string fields: tasks, people_to_connect, blockers, dependencies, expected_completion.",
+                                                                "tasks: work being done or planned, without blocker or timing text.",
+                                                                "people_to_connect: person names only, or Not specified.",
+                                                                "blockers: the obstacle only; use None mentioned when explicitly unblocked.",
+                                                                "dependencies: prerequisites needed to continue, without repeating coordination wording.",
+                                                                "expected_completion: stated date or time only.",
+                                                                "Do not invent facts. Use Not specified for missing fields.",
+                                                        ].join(" "),
+                                                },
+                                                {
+                                                        role: "user",
+                                                        content: transcript,
+                                                },
+                                        ],
+                                        response_format: {
+                                                type: "json_object",
+                                                json_schema: {
+                                                        type: "object",
+                                                        properties: {
+                                                                tasks: { type: "string" },
+                                                                people_to_connect: { type: "string" },
+                                                                blockers: { type: "string" },
+                                                                dependencies: { type: "string" },
+                                                                expected_completion: { type: "string" },
+                                                        },
+                                                        required: [
+                                                                "tasks",
+                                                                "people_to_connect",
+                                                                "blockers",
+                                                                "dependencies",
+                                                                "expected_completion",
+                                                        ],
+                                                        additionalProperties: false,
+                                                },
+                                        },
+                                        temperature: 0,
+                                        max_tokens: 220,
+                                },
+                        );
+
+                        if (!result.response) {
+                                throw new Error("Structured extraction returned no response.");
+                        }
+
+                        return parsedStructuredUpdate(
+                                transcript,
+                                result.response,
+                        );
+                } catch (error) {
+                        console.error(JSON.stringify({
+                                event: "voice_ai_extraction_failed",
+                                error: error instanceof Error
+                                        ? error.message
+                                        : "Unknown extraction error",
+                        }));
+                        return extractUpdate(transcript);
+                }
+        };
 }
 
 
