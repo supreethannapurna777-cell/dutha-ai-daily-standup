@@ -576,7 +576,7 @@ export function createCloudflareVoiceExtractor(
 
                 try {
                         const result = await env.AI.run(
-                                "@cf/ibm-granite/granite-4.0-h-micro",
+                                "@cf/meta/llama-3.1-8b-instruct",
                                 {
                                         messages: [
                                                 {
@@ -598,7 +598,7 @@ export function createCloudflareVoiceExtractor(
                                                 },
                                         ],
                                         response_format: {
-                                                type: "json_object",
+                                                type: "json_schema",
                                                 json_schema: {
                                                         type: "object",
                                                         properties: {

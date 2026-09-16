@@ -295,10 +295,10 @@ describe("WhatsApp voice updates", () => {
                         original_reply: transcript,
                 });
                 expect(run).toHaveBeenCalledWith(
-                        "@cf/ibm-granite/granite-4.0-h-micro",
+                        "@cf/meta/llama-3.1-8b-instruct",
                         expect.objectContaining({
                                 response_format: expect.objectContaining({
-                                        type: "json_object",
+                                        type: "json_schema",
                                 }),
                                 temperature: 0,
                         }),
