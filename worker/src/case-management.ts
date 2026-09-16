@@ -16,6 +16,11 @@ interface CaseRow {
 	proposed_time: string | null;
 	meeting_link: string | null;
 	manager_notes: string | null;
+	resolution_state: string;
+	sla_due_at: string | null;
+	resolution_summary: string | null;
+	resolution_proposed_at: string | null;
+	resolution_verified_at: string | null;
 	requested_at: string;
 	updated_at: string;
 }
@@ -108,6 +113,11 @@ async function getCases(db: D1Database, tenantId: number, projectId: number): Pr
                                 coordination.proposed_time,
                                 coordination.meeting_link,
                                 coordination.manager_notes,
+                                coordination.resolution_state,
+                                coordination.sla_due_at,
+                                coordination.resolution_summary,
+                                coordination.resolution_proposed_at,
+                                coordination.resolution_verified_at,
                                 coordination.requested_at,
                                 coordination.updated_at
                         FROM coordination_cases
@@ -198,6 +208,8 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
 	const canResolve = ['approved', 'availability_requested', 'time_agreed', 'scheduled', 'in_progress'].includes(coordinationCase.status);
 
 	const canSchedule = coordinationCase.status === 'time_agreed' && coordinationCase.proposed_time;
+	const canVerify = coordinationCase.resolution_state === 'awaiting_verification';
+	const canEscalate = !['resolved', 'awaiting_verification'].includes(coordinationCase.resolution_state);
 
 	return `
                 <article class="case-card">
@@ -215,6 +227,9 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
                                         </span>
                                         <span class="badge status">
                                                 ${escapeHtml(formatStatus(coordinationCase.status))}
+                                        </span>
+                                        <span class="badge lifecycle">
+                                                ${escapeHtml(formatStatus(coordinationCase.resolution_state))}
                                         </span>
                                 </div>
                         </div>
@@ -240,6 +255,10 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
                                         <span>
                                                 ${coordinationCase.meeting_duration_minutes} minutes
                                         </span>
+                                </div>
+                                <div>
+                                        <strong>SLA due</strong>
+                                        <span>${escapeHtml(coordinationCase.sla_due_at ? new Date(coordinationCase.sla_due_at).toLocaleString('en-IN') : 'Set after triage')}</span>
                                 </div>
                         </div>
 
@@ -411,12 +430,34 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
                                                                 value="resolve"
                                                                 class="resolve"
                                                         >
-                                                                Mark resolved
+                                                                Submit for verification
                                                         </button>
                                                 </form>
                                         `
 														: ''
-												}
+										}
+
+                        ${canVerify ? `
+                                <form method="post">
+                                        <input type="hidden" name="case_id" value="${coordinationCase.id}">
+                                        <label>Verification note
+                                                <textarea name="manager_notes" maxlength="500" placeholder="What evidence confirms the blocker is gone?" required></textarea>
+                                        </label>
+                                        <button name="action" value="verify_resolution" class="resolve">Verify and close</button>
+                                </form>
+                        ` : ''}
+
+                        ${canEscalate ? `
+                                <form method="post">
+                                        <input type="hidden" name="case_id" value="${coordinationCase.id}">
+                                        <label>Escalation reason
+                                                <textarea name="manager_notes" maxlength="500" placeholder="Why does this need escalation?" required></textarea>
+                                        </label>
+                                        <button name="action" value="escalate" class="reject">Escalate blocker</button>
+                                </form>
+                        ` : ''}
+
+                        ${coordinationCase.resolution_summary ? `<div class="notes"><strong>Resolution evidence:</strong> ${escapeHtml(coordinationCase.resolution_summary)}</div>` : ''}
 
                         ${
 													coordinationCase.manager_notes
@@ -581,6 +622,11 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
                 .status {
                         color: #1e3a5f;
                         background: #dbeafe;
+                }
+
+                .lifecycle {
+                        color: #5b21b6;
+                        background: #ede9fe;
                 }
 
                 .normal {
@@ -766,6 +812,10 @@ async function renderPage(
 					? 'Meeting scheduled and participants notified.'
 					: updated === 'resolved'
 						? 'Coordination case resolved.'
+						: updated === 'verification'
+							? 'Resolution recorded and awaiting verification.'
+							: updated === 'escalated'
+								? 'Coordination case escalated.'
 						: null;
 
 	return htmlResponse(page(cases, members, message, error), error ? 400 : 200);
@@ -791,6 +841,11 @@ async function getCase(db: D1Database, caseId: number, tenantId: number, project
                                 coordination.proposed_time,
                                 coordination.meeting_link,
                                 coordination.manager_notes,
+                                coordination.resolution_state,
+                                coordination.sla_due_at,
+                                coordination.resolution_summary,
+                                coordination.resolution_proposed_at,
+                                coordination.resolution_verified_at,
                                 coordination.requested_at,
                                 coordination.updated_at
                         FROM coordination_cases
@@ -1062,6 +1117,16 @@ async function processDecision(
                                         meeting_duration_minutes = ?,
                                         manager_notes = ?,
                                         status = 'approved',
+                                        resolution_state = 'triaged',
+                                        sla_due_at = COALESCE(
+                                                sla_due_at,
+                                                datetime('now', CASE priority
+                                                        WHEN 'critical' THEN '+4 hours'
+                                                        WHEN 'high' THEN '+1 day'
+                                                        WHEN 'normal' THEN '+3 days'
+                                                        ELSE '+5 days'
+                                                END)
+                                        ),
                                         approved_at = CURRENT_TIMESTAMP,
                                         updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ?
@@ -1158,6 +1223,7 @@ async function processDecision(
                                 UPDATE coordination_cases
                                 SET
                                         status = 'scheduled',
+                                        resolution_state = 'in_coordination',
                                         updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ?
                                         AND status = 'time_agreed'
@@ -1193,22 +1259,65 @@ async function processDecision(
 			`
                                 UPDATE coordination_cases
                                 SET
-                                        status = 'resolved',
+                                        status = 'in_progress',
+                                        resolution_state = 'awaiting_verification',
                                         manager_notes = ?,
-                                        resolved_at = CURRENT_TIMESTAMP,
+                                        resolution_summary = ?,
+                                        resolution_proposed_at = CURRENT_TIMESTAMP,
                                         updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ?
                                 `,
 		)
-			.bind(notes, caseId)
+			.bind(notes, notes, caseId)
 			.run();
 
-		await recordManagerEvent(env.DB, caseId, 'case_resolved', notes);
+		await env.DB.prepare(`
+			INSERT INTO blocker_resolution_evidence (
+				tenant_id, project_id, case_id, evidence_type, summary,
+				created_by_type, created_by_management_user_id
+			) VALUES (?, ?, ?, 'manager_note', ?, 'manager', ?)
+		`).bind(principal.tenantId, projectId, caseId, notes, principal.userId).run();
+
+		await recordManagerEvent(env.DB, caseId, 'resolution_proposed', notes);
 
 		return {
 			error: null,
-			redirect: 'resolved',
+			redirect: 'verification',
 		};
+	}
+
+	if (action === 'verify_resolution') {
+		if (coordinationCase.resolution_state !== 'awaiting_verification') {
+			return { error: 'This case is not awaiting resolution verification.', redirect: null };
+		}
+		if (!notes) return { error: 'Enter a verification note.', redirect: null };
+		await env.DB.prepare(`
+			UPDATE coordination_cases SET status = 'resolved', resolution_state = 'resolved',
+				resolution_verified_at = CURRENT_TIMESTAMP, verified_by_type = 'manager',
+				resolved_at = CURRENT_TIMESTAMP, manager_notes = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ? AND resolution_state = 'awaiting_verification'
+		`).bind(notes, caseId).run();
+		await env.DB.prepare(`
+			INSERT INTO blocker_resolution_evidence (
+				tenant_id, project_id, case_id, evidence_type, summary,
+				created_by_type, created_by_management_user_id
+			) VALUES (?, ?, ?, 'requester_confirmation', ?, 'manager', ?)
+		`).bind(principal.tenantId, projectId, caseId, notes, principal.userId).run();
+		await recordManagerEvent(env.DB, caseId, 'resolution_verified', notes);
+		return { error: null, redirect: 'resolved' };
+	}
+
+	if (action === 'escalate') {
+		if (coordinationCase.resolution_state === 'resolved') {
+			return { error: 'A resolved case cannot be escalated.', redirect: null };
+		}
+		if (!notes) return { error: 'Enter an escalation reason.', redirect: null };
+		await env.DB.prepare(`
+			UPDATE coordination_cases SET resolution_state = 'escalated', priority = 'critical',
+				manager_notes = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+		`).bind(notes, caseId).run();
+		await recordManagerEvent(env.DB, caseId, 'case_escalated', notes);
+		return { error: null, redirect: 'escalated' };
 	}
 
 	return {

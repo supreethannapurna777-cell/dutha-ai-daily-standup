@@ -667,4 +667,80 @@ describe("manager coordination case controls", () => {
 
                 expect(response.status).toBe(403);
         });
+
+        it("requires evidence and verification before closing a blocker", async () => {
+                await env.DB.prepare(`
+                        UPDATE coordination_cases
+                        SET status = 'approved', resolution_state = 'triaged',
+                                responsible_member_id = ?
+                        WHERE id = ?
+                `).bind(responsibleId, caseId).run();
+
+                const proposed = await caseManagementResponse(
+                        request("POST", new URLSearchParams({
+                                case_id: String(caseId),
+                                action: "resolve",
+                                manager_notes: "Credentials were issued and tested.",
+                        })),
+                        caseEnv,
+                );
+                expect(proposed.status).toBe(303);
+                const awaiting = await env.DB.prepare(`
+                        SELECT status, resolution_state, resolution_summary
+                        FROM coordination_cases WHERE id = ?
+                `).bind(caseId).first<{
+                        status: string;
+                        resolution_state: string;
+                        resolution_summary: string;
+                }>();
+                expect(awaiting).toEqual({
+                        status: "in_progress",
+                        resolution_state: "awaiting_verification",
+                        resolution_summary: "Credentials were issued and tested.",
+                });
+
+                const verified = await caseManagementResponse(
+                        request("POST", new URLSearchParams({
+                                case_id: String(caseId),
+                                action: "verify_resolution",
+                                manager_notes: "Requester confirmed database access.",
+                        })),
+                        caseEnv,
+                );
+                expect(verified.status).toBe(303);
+                const closed = await env.DB.prepare(`
+                        SELECT status, resolution_state, verified_by_type
+                        FROM coordination_cases WHERE id = ?
+                `).bind(caseId).first<{
+                        status: string;
+                        resolution_state: string;
+                        verified_by_type: string;
+                }>();
+                expect(closed).toEqual({
+                        status: "resolved",
+                        resolution_state: "resolved",
+                        verified_by_type: "manager",
+                });
+                const evidence = await env.DB.prepare(`
+                        SELECT COUNT(*) AS count FROM blocker_resolution_evidence
+                        WHERE case_id = ?
+                `).bind(caseId).first<{ count: number }>();
+                expect(evidence?.count).toBe(2);
+        });
+
+        it("escalates an unresolved blocker to critical", async () => {
+                const response = await caseManagementResponse(
+                        request("POST", new URLSearchParams({
+                                case_id: String(caseId),
+                                action: "escalate",
+                                manager_notes: "SLA risk requires delivery-head action.",
+                        })),
+                        caseEnv,
+                );
+                expect(response.status).toBe(303);
+                const stored = await env.DB.prepare(`
+                        SELECT resolution_state, priority FROM coordination_cases WHERE id = ?
+                `).bind(caseId).first<{ resolution_state: string; priority: string }>();
+                expect(stored).toEqual({ resolution_state: "escalated", priority: "critical" });
+        });
 });
