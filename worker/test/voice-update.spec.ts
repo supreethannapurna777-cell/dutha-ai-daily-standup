@@ -295,10 +295,17 @@ describe("WhatsApp voice updates", () => {
                         original_reply: transcript,
                 });
                 expect(run).toHaveBeenCalledWith(
-                        "@cf/meta/llama-3.1-8b-instruct",
+                        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
                         expect.objectContaining({
                                 response_format: expect.objectContaining({
                                         type: "json_schema",
+                                        json_schema: expect.objectContaining({
+                                                properties: expect.objectContaining({
+                                                        dependencies: expect.objectContaining({
+                                                                description: expect.stringContaining("never return only a person's name"),
+                                                        }),
+                                                }),
+                                        }),
                                 }),
                                 temperature: 0,
                         }),

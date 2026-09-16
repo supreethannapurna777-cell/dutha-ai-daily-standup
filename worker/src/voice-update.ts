@@ -576,7 +576,7 @@ export function createCloudflareVoiceExtractor(
 
                 try {
                         const result = await env.AI.run(
-                                "@cf/meta/llama-3.1-8b-instruct",
+                                "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
                                 {
                                         messages: [
                                                 {
@@ -587,7 +587,7 @@ export function createCloudflareVoiceExtractor(
                                                                 "tasks: work being done or planned, without blocker or timing text.",
                                                                 "people_to_connect: person names only, or Not specified.",
                                                                 "blockers: the obstacle only; use None mentioned when explicitly unblocked.",
-                                                                "dependencies: prerequisites needed to continue, without repeating coordination wording.",
+                                                                "dependencies: the full prerequisite, resource, approval, access, or input needed to continue; include what is needed and its source or owner when stated, never only a person's name.",
                                                                 "expected_completion: stated date or time only.",
                                                                 "Do not invent facts. Use Not specified for missing fields.",
                                                         ].join(" "),
@@ -602,11 +602,26 @@ export function createCloudflareVoiceExtractor(
                                                 json_schema: {
                                                         type: "object",
                                                         properties: {
-                                                                tasks: { type: "string" },
-                                                                people_to_connect: { type: "string" },
-                                                                blockers: { type: "string" },
-                                                                dependencies: { type: "string" },
-                                                                expected_completion: { type: "string" },
+                                                                tasks: {
+                                                                        type: "string",
+                                                                        description: "Work being done or planned, without blocker, dependency, or timing text.",
+                                                                },
+                                                                people_to_connect: {
+                                                                        type: "string",
+                                                                        description: "Person names only, or Not specified.",
+                                                                },
+                                                                blockers: {
+                                                                        type: "string",
+                                                                        description: "The obstacle preventing progress, or None mentioned.",
+                                                                },
+                                                                dependencies: {
+                                                                        type: "string",
+                                                                        description: "The full prerequisite, resource, approval, access, or input needed to continue. Include what is needed and its source or owner when stated; never return only a person's name.",
+                                                                },
+                                                                expected_completion: {
+                                                                        type: "string",
+                                                                        description: "The stated completion date or time only, or Not specified.",
+                                                                },
                                                         },
                                                         required: [
                                                                 "tasks",
