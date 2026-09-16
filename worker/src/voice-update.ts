@@ -623,13 +623,31 @@ export function createCloudflareVoiceExtractor(
                                 },
                         );
 
-                        if (!result.response) {
+                        const resultRecord = result as unknown as Record<string, unknown>;
+                        const wrappedResponse = resultRecord.response;
+                        const response = typeof wrappedResponse === "string"
+                                ? wrappedResponse
+                                : wrappedResponse && typeof wrappedResponse === "object"
+                                        ? JSON.stringify(wrappedResponse)
+                                        : typeof result === "string"
+                                                ? result
+                                                : [
+                                                        "tasks",
+                                                        "people_to_connect",
+                                                        "blockers",
+                                                        "dependencies",
+                                                        "expected_completion",
+                                                ].some((field) => field in resultRecord)
+                                                        ? JSON.stringify(resultRecord)
+                                                        : "";
+
+                        if (!response) {
                                 throw new Error("Structured extraction returned no response.");
                         }
 
                         return parsedStructuredUpdate(
                                 transcript,
-                                result.response,
+                                response,
                         );
                 } catch (error) {
                         console.error(JSON.stringify({

@@ -304,4 +304,27 @@ describe("WhatsApp voice updates", () => {
                         }),
                 );
         });
+
+        it("accepts Cloudflare structured output returned as a direct object", async () => {
+                const run = vi.fn().mockResolvedValue({
+                        tasks: "Deploy the application and test the voice workflow",
+                        people_to_connect: "Imran",
+                        blockers: "Database access credentials are pending",
+                        dependencies: "Database access credentials from Imran",
+                        expected_completion: "8 PM today",
+                });
+                const extractor = createCloudflareVoiceExtractor({
+                        AI: { run },
+                } as WorkerEnv);
+                const transcript = "I am testing the voice workflow and expect to finish by 8 PM today.";
+
+                await expect(extractor(transcript)).resolves.toEqual({
+                        tasks: "Deploy the application and test the voice workflow",
+                        people_to_connect: "Imran",
+                        blockers: "Database access credentials are pending",
+                        dependencies: "Database access credentials from Imran",
+                        expected_completion: "8 PM today",
+                        original_reply: transcript,
+                });
+        });
 });
