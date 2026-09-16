@@ -1,190 +1,117 @@
-import type { WorkerEnv } from "./env";
-
+import type { WorkerEnv } from './env';
+import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
 
 interface ManagedMember {
-        id: number;
-        name: string;
-        department: string;
-        active: number;
-        timezone: string;
-        working_days: string;
-        initial_time: string;
-        reminder_1_time: string;
-        reminder_2_time: string;
-        scheduling_enabled: number;
+	id: number;
+	name: string;
+	department: string;
+	active: number;
+	timezone: string;
+	working_days: string;
+	initial_time: string;
+	reminder_1_time: string;
+	reminder_2_time: string;
+	scheduling_enabled: number;
 }
 
+const allowedTimezones = new Set(['Asia/Kolkata', 'Europe/London']);
 
-const allowedTimezones = new Set([
-        "Asia/Kolkata",
-        "Europe/London",
-]);
-
-
-const allowedDays = new Set([
-        "MON",
-        "TUE",
-        "WED",
-        "THU",
-        "FRI",
-        "SAT",
-        "SUN",
-]);
-
+const allowedDays = new Set(['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']);
 
 function escapeHtml(value: unknown): string {
-        return String(value ?? "")
-                .replaceAll("&", "&amp;")
-                .replaceAll("<", "&lt;")
-                .replaceAll(">", "&gt;")
-                .replaceAll('"', "&quot;")
-                .replaceAll("'", "&#039;");
+	return String(value ?? '')
+		.replaceAll('&', '&amp;')
+		.replaceAll('<', '&lt;')
+		.replaceAll('>', '&gt;')
+		.replaceAll('"', '&quot;')
+		.replaceAll("'", '&#039;');
 }
 
+function isAuthorised(request: Request, env: WorkerEnv): boolean {
+	if (!env.DASHBOARD_USERNAME || !env.DASHBOARD_PASSWORD) {
+		return false;
+	}
 
-function isAuthorised(
-        request: Request,
-        env: WorkerEnv,
-): boolean {
-        if (
-                !env.DASHBOARD_USERNAME
-                || !env.DASHBOARD_PASSWORD
-        ) {
-                return false;
-        }
+	const credentials = btoa(`${env.DASHBOARD_USERNAME}:` + env.DASHBOARD_PASSWORD);
 
-        const credentials = btoa(
-                `${env.DASHBOARD_USERNAME}:`
-                + env.DASHBOARD_PASSWORD,
-        );
-
-        return request.headers.get("Authorization")
-                === `Basic ${credentials}`;
+	return request.headers.get('Authorization') === `Basic ${credentials}`;
 }
-
 
 function authenticationRequired(): Response {
-        return new Response(
-                "Authentication required.",
-                {
-                        status: 401,
-                        headers: {
-                                "WWW-Authenticate":
-                                        'Basic realm="Dutha WorkOps"',
-                        },
-                },
-        );
+	return new Response('Authentication required.', {
+		status: 401,
+		headers: {
+			'WWW-Authenticate': 'Basic realm="Dutha WorkOps"',
+		},
+	});
 }
 
-
-function htmlResponse(
-        html: string,
-        status = 200,
-): Response {
-        return new Response(
-                html,
-                {
-                        status,
-                        headers: {
-                                "Content-Type":
-                                        "text/html; charset=utf-8",
-                                "Cache-Control": "no-store",
-                                "X-Frame-Options": "DENY",
-                                "X-Content-Type-Options":
-                                        "nosniff",
-                                "Referrer-Policy":
-                                        "no-referrer",
-                                "Content-Security-Policy":
-                                        "default-src 'none'; "
-                                        + "style-src 'unsafe-inline'; "
-                                        + "form-action 'self'; "
-                                        + "base-uri 'none'; "
-                                        + "frame-ancestors 'none'",
-                        },
-                },
-        );
+function htmlResponse(html: string, status = 200): Response {
+	return new Response(html, {
+		status,
+		headers: {
+			'Content-Type': 'text/html; charset=utf-8',
+			'Cache-Control': 'no-store',
+			'X-Frame-Options': 'DENY',
+			'X-Content-Type-Options': 'nosniff',
+			'Referrer-Policy': 'no-referrer',
+			'Content-Security-Policy':
+				"default-src 'none'; " + "style-src 'unsafe-inline'; " + "form-action 'self'; " + "base-uri 'none'; " + "frame-ancestors 'none'",
+		},
+	});
 }
 
+function validateSameOrigin(request: Request): boolean {
+	const expectedOrigin = new URL(request.url).origin;
+	const origin = request.headers.get('Origin');
 
-function validateSameOrigin(
-        request: Request,
-): boolean {
-        const expectedOrigin =
-                new URL(request.url).origin;
-        const origin =
-                request.headers.get("Origin");
+	if (origin && origin !== 'null') {
+		return origin === expectedOrigin;
+	}
 
-        if (origin && origin !== "null") {
-                return origin === expectedOrigin;
-        }
-
-        return request.headers.get(
-                "Sec-Fetch-Site",
-        ) === "same-origin";
+	return request.headers.get('Sec-Fetch-Site') === 'same-origin';
 }
-
 
 function validPhone(phone: string): boolean {
-        return /^[1-9][0-9]{7,14}$/.test(phone);
+	return /^[1-9][0-9]{7,14}$/.test(phone);
 }
-
 
 function validTime(value: string): boolean {
-        const match = /^([01][0-9]|2[0-3]):([0-5][0-9])$/
-                .exec(value);
+	const match = /^([01][0-9]|2[0-3]):([0-5][0-9])$/.exec(value);
 
-        if (!match) {
-                return false;
-        }
+	if (!match) {
+		return false;
+	}
 
-        return Number(match[2]) % 15 === 0;
+	return Number(match[2]) % 15 === 0;
 }
-
 
 function minutesFromMidnight(value: string): number {
-        const [hours, minutes] = value
-                .split(":")
-                .map(Number);
+	const [hours, minutes] = value.split(':').map(Number);
 
-        return (hours * 60) + minutes;
+	return hours * 60 + minutes;
 }
 
+function normaliseWorkingDays(form: FormData): string | null {
+	const days = form
+		.getAll('working_days')
+		.map(String)
+		.map((day) => day.toUpperCase())
+		.filter((day) => allowedDays.has(day));
 
-function normaliseWorkingDays(
-        form: FormData,
-): string | null {
-        const days = form
-                .getAll("working_days")
-                .map(String)
-                .map((day) => day.toUpperCase())
-                .filter((day) => allowedDays.has(day));
+	const uniqueDays = [...new Set(days)];
 
-        const uniqueDays = [...new Set(days)];
+	if (uniqueDays.length === 0) {
+		return null;
+	}
 
-        if (uniqueDays.length === 0) {
-                return null;
-        }
-
-        return [
-                "MON",
-                "TUE",
-                "WED",
-                "THU",
-                "FRI",
-                "SAT",
-                "SUN",
-        ]
-                .filter((day) => uniqueDays.includes(day))
-                .join(",");
+	return ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].filter((day) => uniqueDays.includes(day)).join(',');
 }
 
-
-async function getMembers(
-        db: D1Database,
-): Promise<ManagedMember[]> {
-        const result = await db
-                .prepare(
-                        `
+async function getMembers(db: D1Database, tenantId: number, projectId: number): Promise<ManagedMember[]> {
+	const result = await db
+		.prepare(
+			`
                         SELECT
                                 id,
                                 name,
@@ -197,54 +124,46 @@ async function getMembers(
                                 reminder_2_time,
                                 scheduling_enabled
                         FROM team_members
+                        WHERE tenant_id = ?
+                                AND (
+                                        primary_project_id = ?
+                                        OR EXISTS (
+                                        SELECT 1 FROM team_member_projects
+                                        WHERE team_member_id = team_members.id
+                                                AND project_id = ?
+                                        )
+                                )
                         ORDER BY name
                         `,
-                )
-                .all<ManagedMember>();
+		)
+		.bind(tenantId, projectId, projectId)
+		.all<ManagedMember>();
 
-        return result.results;
+	return result.results;
 }
 
+function dayCheckboxes(member: ManagedMember): string {
+	const selected = new Set(member.working_days.split(',').map((day) => day.trim()));
 
-function dayCheckboxes(
-        member: ManagedMember,
-): string {
-        const selected = new Set(
-                member.working_days
-                        .split(",")
-                        .map((day) => day.trim()),
-        );
-
-        return [
-                "MON",
-                "TUE",
-                "WED",
-                "THU",
-                "FRI",
-                "SAT",
-                "SUN",
-        ]
-                .map((day) => `
+	return ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN']
+		.map(
+			(day) => `
                         <label class="day">
                                 <input
                                         type="checkbox"
                                         name="working_days"
                                         value="${day}"
-                                        ${selected.has(day)
-                                                ? "checked"
-                                                : ""}
+                                        ${selected.has(day) ? 'checked' : ''}
                                 >
                                 ${day}
                         </label>
-                `)
-                .join("");
+                `,
+		)
+		.join('');
 }
 
-
-function memberCard(
-        member: ManagedMember,
-): string {
-        return `
+function memberCard(member: ManagedMember): string {
+	return `
                 <form method="post" class="member-card">
                         <input
                                 type="hidden"
@@ -262,16 +181,8 @@ function memberCard(
                                         <h2>${escapeHtml(member.name)}</h2>
                                         <p>${escapeHtml(member.department)}</p>
                                 </div>
-                                <span class="status ${
-                                        member.active
-                                                ? "active"
-                                                : "inactive"
-                                }">
-                                        ${
-                                                member.active
-                                                        ? "Active"
-                                                        : "Inactive"
-                                        }
+                                <span class="status ${member.active ? 'active' : 'inactive'}">
+                                        ${member.active ? 'Active' : 'Inactive'}
                                 </span>
                         </div>
 
@@ -281,24 +192,14 @@ function memberCard(
                                         <select name="timezone" required>
                                                 <option
                                                         value="Asia/Kolkata"
-                                                        ${
-                                                                member.timezone
-                                                                === "Asia/Kolkata"
-                                                                        ? "selected"
-                                                                        : ""
-                                                        }
+                                                        ${member.timezone === 'Asia/Kolkata' ? 'selected' : ''}
                                                 >
                                                         India
                                                         (Asia/Kolkata)
                                                 </option>
                                                 <option
                                                         value="Europe/London"
-                                                        ${
-                                                                member.timezone
-                                                                === "Europe/London"
-                                                                        ? "selected"
-                                                                        : ""
-                                                        }
+                                                        ${member.timezone === 'Europe/London' ? 'selected' : ''}
                                                 >
                                                         United Kingdom
                                                         (Europe/London)
@@ -312,9 +213,7 @@ function memberCard(
                                                 type="time"
                                                 name="initial_time"
                                                 step="900"
-                                                value="${escapeHtml(
-                                                        member.initial_time,
-                                                )}"
+                                                value="${escapeHtml(member.initial_time)}"
                                                 required
                                         >
                                 </label>
@@ -325,9 +224,7 @@ function memberCard(
                                                 type="time"
                                                 name="reminder_1_time"
                                                 step="900"
-                                                value="${escapeHtml(
-                                                        member.reminder_1_time,
-                                                )}"
+                                                value="${escapeHtml(member.reminder_1_time)}"
                                                 required
                                         >
                                 </label>
@@ -338,9 +235,7 @@ function memberCard(
                                                 type="time"
                                                 name="reminder_2_time"
                                                 step="900"
-                                                value="${escapeHtml(
-                                                        member.reminder_2_time,
-                                                )}"
+                                                value="${escapeHtml(member.reminder_2_time)}"
                                                 required
                                         >
                                 </label>
@@ -359,11 +254,7 @@ function memberCard(
                                                 type="checkbox"
                                                 name="active"
                                                 value="1"
-                                                ${
-                                                        member.active
-                                                                ? "checked"
-                                                                : ""
-                                                }
+                                                ${member.active ? 'checked' : ''}
                                         >
                                         Active team member
                                 </label>
@@ -373,11 +264,7 @@ function memberCard(
                                                 type="checkbox"
                                                 name="scheduling_enabled"
                                                 value="1"
-                                                ${
-                                                        member.scheduling_enabled
-                                                                ? "checked"
-                                                                : ""
-                                                }
+                                                ${member.scheduling_enabled ? 'checked' : ''}
                                         >
                                         Automated messages enabled
                                 </label>
@@ -390,17 +277,10 @@ function memberCard(
         `;
 }
 
+function page(members: ManagedMember[], message: string | null, error: string | null): string {
+	const cards = members.length ? members.map(memberCard).join('') : `<p class="empty">No members configured.</p>`;
 
-function page(
-        members: ManagedMember[],
-        message: string | null,
-        error: string | null,
-): string {
-        const cards = members.length
-                ? members.map(memberCard).join("")
-                : `<p class="empty">No members configured.</p>`;
-
-        return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html lang="en">
 <head>
         <meta charset="UTF-8">
@@ -602,21 +482,9 @@ function page(
                         </a>
                 </header>
 
-                ${
-                        message
-                                ? `<div class="notice">${
-                                        escapeHtml(message)
-                                }</div>`
-                                : ""
-                }
+                ${message ? `<div class="notice">${escapeHtml(message)}</div>` : ''}
 
-                ${
-                        error
-                                ? `<div class="error">${
-                                        escapeHtml(error)
-                                }</div>`
-                                : ""
-                }
+                ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
                 <form method="post" class="add-card">
                         <input
@@ -693,178 +561,122 @@ function page(
 </html>`;
 }
 
-
 async function renderManagementPage(
-        request: Request,
-        env: WorkerEnv,
-        error: string | null = null,
+	request: Request,
+	env: WorkerEnv,
+	principal: ManagementPrincipal,
+	projectId: number,
+	error: string | null = null,
 ): Promise<Response> {
-        if (!isAuthorised(request, env)) {
-                return authenticationRequired();
-        }
+	if (!isAuthorised(request, env)) {
+		return authenticationRequired();
+	}
 
-        const members = await getMembers(env.DB);
-        const updated =
-                new URL(request.url)
-                        .searchParams
-                        .get("updated");
+	const members = await getMembers(env.DB, principal.tenantId, projectId);
+	const updated = new URL(request.url).searchParams.get('updated');
 
-        const message =
-                updated === "member"
-                        ? "Member schedule updated successfully."
-                        : updated === "added"
-                                ? "Team member added successfully."
-                                : null;
+	const message =
+		updated === 'member' ? 'Member schedule updated successfully.' : updated === 'added' ? 'Team member added successfully.' : null;
 
-        return htmlResponse(
-                page(
-                        members,
-                        message,
-                        error,
-                ),
-                error ? 400 : 200,
-        );
+	return htmlResponse(page(members, message, error), error ? 400 : 200);
 }
 
+async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number): Promise<string | null> {
+	const name = String(form.get('name') ?? '').trim();
 
-async function addMember(
-        form: FormData,
-        env: WorkerEnv,
-): Promise<string | null> {
-        const name = String(
-                form.get("name") ?? "",
-        ).trim();
+	const department = String(form.get('department') ?? '').trim();
 
-        const department = String(
-                form.get("department") ?? "",
-        ).trim();
+	const phone = String(form.get('phone') ?? '').replace(/\D/g, '');
 
-        const phone = String(
-                form.get("phone") ?? "",
-        )
-                .replace(/\D/g, "");
+	const timezone = String(form.get('timezone') ?? '');
 
-        const timezone = String(
-                form.get("timezone") ?? "",
-        );
+	if (!name || name.length > 80 || !department || department.length > 100) {
+		return 'Enter a valid name and department.';
+	}
 
-        if (
-                !name
-                || name.length > 80
-                || !department
-                || department.length > 100
-        ) {
-                return "Enter a valid name and department.";
-        }
+	if (!validPhone(phone)) {
+		return 'Enter a valid WhatsApp number with country code.';
+	}
 
-        if (!validPhone(phone)) {
-                return "Enter a valid WhatsApp number with country code.";
-        }
+	if (!allowedTimezones.has(timezone)) {
+		return 'Select a supported timezone.';
+	}
 
-        if (!allowedTimezones.has(timezone)) {
-                return "Select a supported timezone.";
-        }
-
-        try {
-                await env.DB
-                        .prepare(
-                                `
+	try {
+		const inserted = await env.DB.prepare(
+			`
                                 INSERT INTO team_members (
                                         name,
                                         phone,
                                         department,
-                                        timezone
+                                        timezone,
+                                        tenant_id,
+                                        primary_project_id
                                 )
-                                VALUES (?, ?, ?, ?)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                                RETURNING id
                                 `,
-                        )
-                        .bind(
-                                name,
-                                phone,
-                                department,
-                                timezone,
-                        )
-                        .run();
-        } catch {
-                return "The member could not be added. The phone number may already exist.";
-        }
+		)
+			.bind(name, phone, department, timezone, principal.tenantId, projectId)
+			.first<{ id: number }>();
+		if (!inserted) throw new Error('Member was not inserted.');
+		await env.DB.prepare(
+			`
+                        INSERT INTO team_member_projects (project_id, team_member_id)
+                        VALUES (?, ?)
+                `,
+		)
+			.bind(projectId, inserted.id)
+			.run();
+	} catch {
+		return 'The member could not be added. The phone number may already exist.';
+	}
 
-        return null;
+	return null;
 }
 
+async function updateMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number): Promise<string | null> {
+	const memberId = Number(form.get('member_id'));
 
-async function updateMember(
-        form: FormData,
-        env: WorkerEnv,
-): Promise<string | null> {
-        const memberId = Number(
-                form.get("member_id"),
-        );
+	const timezone = String(form.get('timezone') ?? '');
 
-        const timezone = String(
-                form.get("timezone") ?? "",
-        );
+	const initialTime = String(form.get('initial_time') ?? '');
 
-        const initialTime = String(
-                form.get("initial_time") ?? "",
-        );
+	const reminder1Time = String(form.get('reminder_1_time') ?? '');
 
-        const reminder1Time = String(
-                form.get("reminder_1_time") ?? "",
-        );
+	const reminder2Time = String(form.get('reminder_2_time') ?? '');
 
-        const reminder2Time = String(
-                form.get("reminder_2_time") ?? "",
-        );
+	const workingDays = normaliseWorkingDays(form);
 
-        const workingDays =
-                normaliseWorkingDays(form);
+	const active = form.get('active') === '1' ? 1 : 0;
 
-        const active =
-                form.get("active") === "1"
-                        ? 1
-                        : 0;
+	const schedulingEnabled = form.get('scheduling_enabled') === '1' ? 1 : 0;
 
-        const schedulingEnabled =
-                form.get("scheduling_enabled") === "1"
-                        ? 1
-                        : 0;
+	if (!Number.isInteger(memberId) || memberId <= 0) {
+		return 'Invalid team member.';
+	}
 
-        if (
-                !Number.isInteger(memberId)
-                || memberId <= 0
-        ) {
-                return "Invalid team member.";
-        }
+	if (!allowedTimezones.has(timezone)) {
+		return 'Select a supported timezone.';
+	}
 
-        if (!allowedTimezones.has(timezone)) {
-                return "Select a supported timezone.";
-        }
+	if (!validTime(initialTime) || !validTime(reminder1Time) || !validTime(reminder2Time)) {
+		return 'Times must use valid 15-minute intervals.';
+	}
 
-        if (
-                !validTime(initialTime)
-                || !validTime(reminder1Time)
-                || !validTime(reminder2Time)
-        ) {
-                return "Times must use valid 15-minute intervals.";
-        }
+	if (
+		minutesFromMidnight(initialTime) >= minutesFromMidnight(reminder1Time) ||
+		minutesFromMidnight(reminder1Time) >= minutesFromMidnight(reminder2Time)
+	) {
+		return 'Initial request and reminders must be in chronological order.';
+	}
 
-        if (
-                minutesFromMidnight(initialTime)
-                        >= minutesFromMidnight(reminder1Time)
-                || minutesFromMidnight(reminder1Time)
-                        >= minutesFromMidnight(reminder2Time)
-        ) {
-                return "Initial request and reminders must be in chronological order.";
-        }
+	if (!workingDays) {
+		return 'Select at least one working day.';
+	}
 
-        if (!workingDays) {
-                return "Select at least one working day.";
-        }
-
-        const result = await env.DB
-                .prepare(
-                        `
+	const result = await env.DB.prepare(
+		`
                         UPDATE team_members
                         SET
                                 timezone = ?,
@@ -874,106 +686,101 @@ async function updateMember(
                                 reminder_2_time = ?,
                                 active = ?,
                                 scheduling_enabled = ?
-                        WHERE id = ?
+                        WHERE id = ? AND tenant_id = ?
+                                AND (
+                                        primary_project_id = ?
+                                        OR EXISTS (
+                                        SELECT 1 FROM team_member_projects
+                                        WHERE team_member_id = team_members.id
+                                                AND project_id = ?
+                                        )
+                                )
                         `,
-                )
-                .bind(
-                        timezone,
-                        workingDays,
-                        initialTime,
-                        reminder1Time,
-                        reminder2Time,
-                        active,
-                        schedulingEnabled,
-                        memberId,
-                )
-                .run();
+	)
+		.bind(
+			timezone,
+			workingDays,
+			initialTime,
+			reminder1Time,
+			reminder2Time,
+			active,
+			schedulingEnabled,
+			memberId,
+			principal.tenantId,
+			projectId,
+			projectId,
+		)
+		.run();
 
-        if (!result.meta.changes) {
-                return "Team member was not found.";
-        }
+	if (!result.meta.changes) {
+		return 'Team member was not found.';
+	}
 
-        return null;
+	return null;
 }
 
+export async function memberManagementResponse(request: Request, env: WorkerEnv): Promise<Response> {
+	if (!isAuthorised(request, env)) {
+		return authenticationRequired();
+	}
 
-export async function memberManagementResponse(
-        request: Request,
-        env: WorkerEnv,
-): Promise<Response> {
-        if (!isAuthorised(request, env)) {
-                return authenticationRequired();
-        }
+	const principal = managementPrincipalFromRequest(request) ?? {
+		userId: 1,
+		tenantId: 1,
+		role: 'admin' as const,
+	};
+	const projectId = Number(new URL(request.url).searchParams.get('project') ?? 1);
+	if (!Number.isSafeInteger(projectId) || projectId <= 0) {
+		return new Response('Invalid project.', { status: 400 });
+	}
+	try {
+		await requireProjectAccess(env.DB, principal, projectId);
+	} catch {
+		return new Response('Project access denied.', { status: 403 });
+	}
 
-        if (request.method === "GET") {
-                return renderManagementPage(
-                        request,
-                        env,
-                );
-        }
+	if (request.method === 'GET') {
+		return renderManagementPage(request, env, principal, projectId);
+	}
 
-        if (request.method !== "POST") {
-                return new Response(
-                        "Method not allowed.",
-                        {
-                                status: 405,
-                                headers: {
-                                        Allow: "GET, POST",
-                                },
-                        },
-                );
-        }
+	if (request.method !== 'POST') {
+		return new Response('Method not allowed.', {
+			status: 405,
+			headers: {
+				Allow: 'GET, POST',
+			},
+		});
+	}
 
-        if (!validateSameOrigin(request)) {
-                return new Response(
-                        "Invalid request origin.",
-                        { status: 403 },
-                );
-        }
+	if (!validateSameOrigin(request)) {
+		return new Response('Invalid request origin.', { status: 403 });
+	}
 
-        const form = await request.formData();
-        const action = String(
-                form.get("action") ?? "",
-        );
+	const form = await request.formData();
+	const action = String(form.get('action') ?? '');
 
-        let error: string | null;
-        let redirectValue: string;
+	let error: string | null;
+	let redirectValue: string;
 
-        if (action === "add") {
-                error = await addMember(
-                        form,
-                        env,
-                );
-                redirectValue = "added";
-        } else if (action === "update") {
-                error = await updateMember(
-                        form,
-                        env,
-                );
-                redirectValue = "member";
-        } else {
-                error = "Invalid management action.";
-                redirectValue = "";
-        }
+	if (action === 'add') {
+		error = await addMember(form, env, principal, projectId);
+		redirectValue = 'added';
+	} else if (action === 'update') {
+		error = await updateMember(form, env, principal, projectId);
+		redirectValue = 'member';
+	} else {
+		error = 'Invalid management action.';
+		redirectValue = '';
+	}
 
-        if (error) {
-                return renderManagementPage(
-                        request,
-                        env,
-                        error,
-                );
-        }
+	if (error) {
+		return renderManagementPage(request, env, principal, projectId, error);
+	}
 
-        return new Response(
-                null,
-                {
-                        status: 303,
-                        headers: {
-                                Location:
-                                        `/dashboard/members?updated=${
-                                                redirectValue
-                                        }`,
-                        },
-                },
-        );
+	return new Response(null, {
+		status: 303,
+		headers: {
+			Location: `/dashboard/members?updated=${redirectValue}`,
+		},
+	});
 }

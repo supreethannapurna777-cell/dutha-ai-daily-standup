@@ -1,153 +1,97 @@
-import type { WorkerEnv } from "./env";
-import {
-        sendTextMessage,
-        type Fetcher,
-} from "./whatsapp";
-
+import type { WorkerEnv } from './env';
+import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
+import { sendTextMessage, type Fetcher } from './whatsapp';
 
 interface CaseRow {
-        id: number;
-        requester_member_id: number;
-        requester_name: string;
-        responsible_member_id: number | null;
-        responsible_name: string | null;
-        case_type: string;
-        issue_summary: string;
-        status: string;
-        priority: string;
-        meeting_duration_minutes: number;
-        proposed_time: string | null;
-        meeting_link: string | null;
-        manager_notes: string | null;
-        requested_at: string;
-        updated_at: string;
+	id: number;
+	requester_member_id: number;
+	requester_name: string;
+	responsible_member_id: number | null;
+	responsible_name: string | null;
+	case_type: string;
+	issue_summary: string;
+	status: string;
+	priority: string;
+	meeting_duration_minutes: number;
+	proposed_time: string | null;
+	meeting_link: string | null;
+	manager_notes: string | null;
+	requested_at: string;
+	updated_at: string;
 }
-
 
 interface MemberOption {
-        id: number;
-        name: string;
-        department: string;
+	id: number;
+	name: string;
+	department: string;
 }
 
-
-const allowedDurations = new Set([
-        15,
-        20,
-        30,
-        45,
-        60,
-]);
-
+const allowedDurations = new Set([15, 20, 30, 45, 60]);
 
 function escapeHtml(value: unknown): string {
-        return String(value ?? "")
-                .replaceAll("&", "&amp;")
-                .replaceAll("<", "&lt;")
-                .replaceAll(">", "&gt;")
-                .replaceAll('"', "&quot;")
-                .replaceAll("'", "&#039;");
+	return String(value ?? '')
+		.replaceAll('&', '&amp;')
+		.replaceAll('<', '&lt;')
+		.replaceAll('>', '&gt;')
+		.replaceAll('"', '&quot;')
+		.replaceAll("'", '&#039;');
 }
 
+function isAuthorised(request: Request, env: WorkerEnv): boolean {
+	if (!env.DASHBOARD_USERNAME || !env.DASHBOARD_PASSWORD) {
+		return false;
+	}
 
-function isAuthorised(
-        request: Request,
-        env: WorkerEnv,
-): boolean {
-        if (
-                !env.DASHBOARD_USERNAME
-                || !env.DASHBOARD_PASSWORD
-        ) {
-                return false;
-        }
+	const credentials = btoa(`${env.DASHBOARD_USERNAME}:` + env.DASHBOARD_PASSWORD);
 
-        const credentials = btoa(
-                `${env.DASHBOARD_USERNAME}:`
-                + env.DASHBOARD_PASSWORD,
-        );
-
-        return request.headers.get("Authorization")
-                === `Basic ${credentials}`;
+	return request.headers.get('Authorization') === `Basic ${credentials}`;
 }
-
 
 function authenticationRequired(): Response {
-        return new Response(
-                "Authentication required.",
-                {
-                        status: 401,
-                        headers: {
-                                "WWW-Authenticate":
-                                        'Basic realm="Dutha WorkOps"',
-                        },
-                },
-        );
+	return new Response('Authentication required.', {
+		status: 401,
+		headers: {
+			'WWW-Authenticate': 'Basic realm="Dutha WorkOps"',
+		},
+	});
 }
 
+function validOrigin(request: Request): boolean {
+	const expectedOrigin = new URL(request.url).origin;
+	const origin = request.headers.get('Origin');
 
-function validOrigin(
-        request: Request,
-): boolean {
-        const expectedOrigin =
-                new URL(request.url).origin;
-        const origin =
-                request.headers.get("Origin");
+	if (origin && origin !== 'null') {
+		return origin === expectedOrigin;
+	}
 
-        if (origin && origin !== "null") {
-                return origin === expectedOrigin;
-        }
-
-        return request.headers.get(
-                "Sec-Fetch-Site",
-        ) === "same-origin";
+	return request.headers.get('Sec-Fetch-Site') === 'same-origin';
 }
 
+function formatStatus(status: string): string {
+	const readable = status.replace(/_/g, ' ');
 
-function formatStatus(
-        status: string,
-): string {
-        const readable =
-                status.replace(/_/g, " ");
-
-        return readable.charAt(0).toUpperCase()
-                + readable.slice(1);
+	return readable.charAt(0).toUpperCase() + readable.slice(1);
 }
 
-function htmlResponse(
-        html: string,
-        status = 200,
-): Response {
-        return new Response(
-                html,
-                {
-                        status,
-                        headers: {
-                                "Content-Type":
-                                        "text/html; charset=utf-8",
-                                "Cache-Control": "no-store",
-                                "X-Frame-Options": "DENY",
-                                "X-Content-Type-Options":
-                                        "nosniff",
-                                "Referrer-Policy":
-                                        "no-referrer",
-                                "Content-Security-Policy":
-                                        "default-src 'none'; "
-                                        + "style-src 'unsafe-inline'; "
-                                        + "form-action 'self'; "
-                                        + "base-uri 'none'; "
-                                        + "frame-ancestors 'none'",
-                        },
-                },
-        );
+function htmlResponse(html: string, status = 200): Response {
+	return new Response(html, {
+		status,
+		headers: {
+			'Content-Type': 'text/html; charset=utf-8',
+			'Cache-Control': 'no-store',
+			'X-Frame-Options': 'DENY',
+			'X-Content-Type-Options': 'nosniff',
+			'Referrer-Policy': 'no-referrer',
+			'Content-Security-Policy':
+				"default-src 'none'; " + "style-src 'unsafe-inline'; " + "form-action 'self'; " + "base-uri 'none'; " + "frame-ancestors 'none'",
+		},
+	});
 }
 
-
-async function getCases(
-        db: D1Database,
-): Promise<CaseRow[]> {
-        const result = await db
-                .prepare(
-                        `
+async function getCases(db: D1Database, tenantId: number, projectId: number): Promise<CaseRow[]> {
+	const result = await db
+		.prepare(
+			`
                         SELECT
                                 coordination.id,
                                 coordination.requester_member_id,
@@ -176,6 +120,8 @@ async function getCases(
                                 AS responsible
                                 ON responsible.id
                                         = coordination.responsible_member_id
+                        WHERE coordination.tenant_id = ?
+                                AND coordination.project_id = ?
                         ORDER BY
                                 CASE coordination.status
                                         WHEN 'pending_assignment'
@@ -196,118 +142,79 @@ async function getCases(
                                 END,
                                 coordination.requested_at DESC
                         `,
-                )
-                .all<CaseRow>();
+		)
+		.bind(tenantId, projectId)
+		.all<CaseRow>();
 
-        return result.results;
+	return result.results;
 }
 
-
-async function getMembers(
-        db: D1Database,
-): Promise<MemberOption[]> {
-        const result = await db
-                .prepare(
-                        `
+async function getMembers(db: D1Database, tenantId: number, projectId: number): Promise<MemberOption[]> {
+	const result = await db
+		.prepare(
+			`
                         SELECT id, name, department
                         FROM team_members
-                        WHERE active = 1
+                        WHERE active = 1 AND tenant_id = ?
+                                AND (
+                                        primary_project_id = ?
+                                        OR EXISTS (
+                                                SELECT 1 FROM team_member_projects
+                                                WHERE team_member_id = team_members.id
+                                                        AND project_id = ?
+                                        )
+                                )
                         ORDER BY name
                         `,
-                )
-                .all<MemberOption>();
+		)
+		.bind(tenantId, projectId, projectId)
+		.all<MemberOption>();
 
-        return result.results;
+	return result.results;
 }
 
+function memberOptions(members: MemberOption[], currentMemberId: number | null, requesterMemberId: number): string {
+	const available = members.filter((member) => member.id !== requesterMemberId);
 
-function memberOptions(
-        members: MemberOption[],
-        currentMemberId: number | null,
-        requesterMemberId: number,
-): string {
-        const available = members.filter(
-                (member) =>
-                        member.id !== requesterMemberId,
-        );
-
-        return [
-                `<option value="">Select responsible person</option>`,
-                ...available.map((member) => `
+	return [
+		`<option value="">Select responsible person</option>`,
+		...available.map(
+			(member) => `
                         <option
                                 value="${member.id}"
-                                ${
-                                        member.id
-                                                === currentMemberId
-                                                ? "selected"
-                                                : ""
-                                }
+                                ${member.id === currentMemberId ? 'selected' : ''}
                         >
                                 ${escapeHtml(member.name)}
                                 — ${escapeHtml(member.department)}
                         </option>
-                `),
-        ].join("");
+                `,
+		),
+	].join('');
 }
 
+function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
+	const canDecide = ['pending_assignment', 'pending_approval'].includes(coordinationCase.status);
 
-function caseCard(
-        coordinationCase: CaseRow,
-        members: MemberOption[],
-): string {
-        const canDecide = [
-                "pending_assignment",
-                "pending_approval",
-        ].includes(coordinationCase.status);
+	const canResolve = ['approved', 'availability_requested', 'time_agreed', 'scheduled', 'in_progress'].includes(coordinationCase.status);
 
-        const canResolve = [
-                "approved",
-                "availability_requested",
-                "time_agreed",
-                "scheduled",
-                "in_progress",
-        ].includes(coordinationCase.status);
+	const canSchedule = coordinationCase.status === 'time_agreed' && coordinationCase.proposed_time;
 
-        const canSchedule =
-                coordinationCase.status === "time_agreed"
-                && coordinationCase.proposed_time;
-
-        return `
+	return `
                 <article class="case-card">
                         <div class="case-header">
                                 <div>
                                         <div class="case-number">
-                                                Case #${
-                                                        coordinationCase.id
-                                                }
+                                                Case #${coordinationCase.id}
                                         </div>
-                                        <h2>${
-                                                escapeHtml(
-                                                        coordinationCase.issue_summary,
-                                                )
-                                        }</h2>
+                                        <h2>${escapeHtml(coordinationCase.issue_summary)}</h2>
                                 </div>
 
                                 <div class="badges">
-                                        <span class="badge ${
-                                                escapeHtml(
-                                                        coordinationCase.priority,
-                                                )
-                                        }">
-                                                ${
-                                                        escapeHtml(
-                                                                coordinationCase.priority,
-                                                        )
-                                                }
+                                        <span class="badge ${escapeHtml(coordinationCase.priority)}">
+                                                ${escapeHtml(coordinationCase.priority)}
                                         </span>
                                         <span class="badge status">
-                                                ${
-                                                        escapeHtml(
-                                                                formatStatus(
-                                                                        coordinationCase.status,
-                                                                ),
-                                                        )
-                                                }
+                                                ${escapeHtml(formatStatus(coordinationCase.status))}
                                         </span>
                                 </div>
                         </div>
@@ -315,52 +222,35 @@ function caseCard(
                         <div class="case-details">
                                 <div>
                                         <strong>Requester</strong>
-                                        <span>${
-                                                escapeHtml(
-                                                        coordinationCase.requester_name,
-                                                )
-                                        }</span>
+                                        <span>${escapeHtml(coordinationCase.requester_name)}</span>
                                 </div>
 
                                 <div>
                                         <strong>Responsible person</strong>
-                                        <span>${
-                                                escapeHtml(
-                                                        coordinationCase.responsible_name
-                                                                ?? "Not assigned",
-                                                )
-                                        }</span>
+                                        <span>${escapeHtml(coordinationCase.responsible_name ?? 'Not assigned')}</span>
                                 </div>
 
                                 <div>
                                         <strong>Type</strong>
-                                        <span>${
-                                                escapeHtml(
-                                                        coordinationCase.case_type,
-                                                )
-                                        }</span>
+                                        <span>${escapeHtml(coordinationCase.case_type)}</span>
                                 </div>
 
                                 <div>
                                         <strong>Duration</strong>
                                         <span>
-                                                ${
-                                                        coordinationCase.meeting_duration_minutes
-                                                } minutes
+                                                ${coordinationCase.meeting_duration_minutes} minutes
                                         </span>
                                 </div>
                         </div>
 
                         ${
-                                canDecide
-                                        ? `
+													canDecide
+														? `
                                                 <form method="post">
                                                         <input
                                                                 type="hidden"
                                                                 name="case_id"
-                                                                value="${
-                                                                        coordinationCase.id
-                                                                }"
+                                                                value="${coordinationCase.id}"
                                                         >
 
                                                         <div class="form-grid">
@@ -370,13 +260,11 @@ function caseCard(
                                                                                 name="responsible_member_id"
                                                                                 required
                                                                         >
-                                                                                ${
-                                                                                        memberOptions(
-                                                                                                members,
-                                                                                                coordinationCase.responsible_member_id,
-                                                                                                coordinationCase.requester_member_id,
-                                                                                        )
-                                                                                }
+                                                                                ${memberOptions(
+																																									members,
+																																									coordinationCase.responsible_member_id,
+																																									coordinationCase.requester_member_id,
+																																								)}
                                                                         </select>
                                                                 </label>
 
@@ -385,29 +273,23 @@ function caseCard(
                                                                         <select
                                                                                 name="meeting_duration_minutes"
                                                                         >
-                                                                                ${
-                                                                                        [
-                                                                                                15,
-                                                                                                20,
-                                                                                                30,
-                                                                                                45,
-                                                                                                60,
-                                                                                        ].map(
-                                                                                                (duration) => `
+                                                                                ${[15, 20, 30, 45, 60]
+																																									.map(
+																																										(duration) => `
                                                                                                         <option
                                                                                                                 value="${duration}"
                                                                                                                 ${
-                                                                                                                        duration
-                                                                                                                        === coordinationCase.meeting_duration_minutes
-                                                                                                                                ? "selected"
-                                                                                                                                : ""
-                                                                                                                }
+																																																									duration ===
+																																																									coordinationCase.meeting_duration_minutes
+																																																										? 'selected'
+																																																										: ''
+																																																								}
                                                                                                         >
                                                                                                                 ${duration} minutes
                                                                                                         </option>
                                                                                                 `,
-                                                                                        ).join("")
-                                                                                }
+																																									)
+																																									.join('')}
                                                                         </select>
                                                                 </label>
                                                         </div>
@@ -418,12 +300,7 @@ function caseCard(
                                                                         name="manager_notes"
                                                                         maxlength="500"
                                                                         placeholder="Optional instructions or context"
-                                                                >${
-                                                                        escapeHtml(
-                                                                                coordinationCase.manager_notes
-                                                                                        ?? "",
-                                                                        )
-                                                                }</textarea>
+                                                                >${escapeHtml(coordinationCase.manager_notes ?? '')}</textarea>
                                                         </label>
 
                                                         <div class="actions">
@@ -446,12 +323,12 @@ function caseCard(
                                                         </div>
                                                 </form>
                                         `
-                                        : ""
-                        }
+														: ''
+												}
 
                         ${
-                                canSchedule
-                                        ? `
+													canSchedule
+														? `
                                                 <form method="post">
                                                         <input
                                                                 type="hidden"
@@ -464,10 +341,7 @@ function caseCard(
                                                                 <input
                                                                         type="url"
                                                                         name="meeting_link"
-                                                                        value="${escapeHtml(
-                                                                                coordinationCase.meeting_link
-                                                                                        ?? "",
-                                                                        )}"
+                                                                        value="${escapeHtml(coordinationCase.meeting_link ?? '')}"
                                                                         placeholder="https://teams.microsoft.com/..."
                                                                         maxlength="2048"
                                                                         required
@@ -483,19 +357,16 @@ function caseCard(
                                                         </button>
                                                 </form>
                                         `
-                                        : ""
-                        }
+														: ''
+												}
 
                         ${
-                                coordinationCase.meeting_link
-                                        && coordinationCase.status === "scheduled"
-                                        ? `
+													coordinationCase.meeting_link && coordinationCase.status === 'scheduled'
+														? `
                                                 <div class="notes">
                                                         <strong>Meeting link:</strong>
                                                         <a
-                                                                href="${escapeHtml(
-                                                                        coordinationCase.meeting_link,
-                                                                )}"
+                                                                href="${escapeHtml(coordinationCase.meeting_link)}"
                                                                 target="_blank"
                                                                 rel="noopener noreferrer"
                                                         >
@@ -503,18 +374,16 @@ function caseCard(
                                                         </a>
                                                 </div>
                                         `
-                                        : ""
-                        }
+														: ''
+												}
 
                         ${
-                                canResolve
-                                        ? `
+													canResolve
+														? `
                                                 <div class="actions">
                                                         <a
                                                                 class="availability-link"
-                                                                href="/dashboard/availability?case=${
-                                                                        coordinationCase.id
-                                                                }"
+                                                                href="/dashboard/availability?case=${coordinationCase.id}"
                                                         >
                                                                 Manage availability
                                                         </a>
@@ -524,9 +393,7 @@ function caseCard(
                                                         <input
                                                                 type="hidden"
                                                                 name="case_id"
-                                                                value="${
-                                                                        coordinationCase.id
-                                                                }"
+                                                                value="${coordinationCase.id}"
                                                         >
 
                                                         <label>
@@ -548,83 +415,44 @@ function caseCard(
                                                         </button>
                                                 </form>
                                         `
-                                        : ""
-                        }
+														: ''
+												}
 
                         ${
-                                coordinationCase.manager_notes
-                                        ? `
+													coordinationCase.manager_notes
+														? `
                                                 <div class="notes">
                                                         <strong>Manager notes:</strong>
-                                                        ${
-                                                                escapeHtml(
-                                                                        coordinationCase.manager_notes,
-                                                                )
-                                                        }
+                                                        ${escapeHtml(coordinationCase.manager_notes)}
                                                 </div>
                                         `
-                                        : ""
-                        }
+														: ''
+												}
                 </article>
         `;
 }
 
+function page(cases: CaseRow[], members: MemberOption[], message: string | null, error: string | null): string {
+	const openCount = cases.filter((coordinationCase) => !['resolved', 'rejected', 'cancelled'].includes(coordinationCase.status)).length;
 
-function page(
-        cases: CaseRow[],
-        members: MemberOption[],
-        message: string | null,
-        error: string | null,
-): string {
-        const openCount = cases.filter(
-                (coordinationCase) =>
-                        ![
-                                "resolved",
-                                "rejected",
-                                "cancelled",
-                        ].includes(
-                                coordinationCase.status,
-                        ),
-        ).length;
+	const pendingCount = cases.filter((coordinationCase) =>
+		['pending_assignment', 'pending_approval'].includes(coordinationCase.status),
+	).length;
 
-        const pendingCount = cases.filter(
-                (coordinationCase) =>
-                        [
-                                "pending_assignment",
-                                "pending_approval",
-                        ].includes(
-                                coordinationCase.status,
-                        ),
-        ).length;
+	const criticalCount = cases.filter(
+		(coordinationCase) =>
+			coordinationCase.priority === 'critical' && !['resolved', 'rejected', 'cancelled'].includes(coordinationCase.status),
+	).length;
 
-        const criticalCount = cases.filter(
-                (coordinationCase) =>
-                        coordinationCase.priority
-                                === "critical"
-                        && ![
-                                "resolved",
-                                "rejected",
-                                "cancelled",
-                        ].includes(
-                                coordinationCase.status,
-                        ),
-        ).length;
-
-        const cards = cases.length
-                ? cases.map(
-                        (coordinationCase) =>
-                                caseCard(
-                                        coordinationCase,
-                                        members,
-                                ),
-                ).join("")
-                : `
+	const cards = cases.length
+		? cases.map((coordinationCase) => caseCard(coordinationCase, members)).join('')
+		: `
                         <div class="empty">
                                 No coordination cases created yet.
                         </div>
                 `;
 
-        return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html lang="en">
 <head>
         <meta charset="UTF-8">
@@ -905,21 +733,9 @@ function page(
                         </div>
                 </section>
 
-                ${
-                        message
-                                ? `<div class="notice">${
-                                        escapeHtml(message)
-                                }</div>`
-                                : ""
-                }
+                ${message ? `<div class="notice">${escapeHtml(message)}</div>` : ''}
 
-                ${
-                        error
-                                ? `<div class="error">${
-                                        escapeHtml(error)
-                                }</div>`
-                                : ""
-                }
+                ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
                 ${cards}
         </main>
@@ -927,52 +743,38 @@ function page(
 </html>`;
 }
 
-
 async function renderPage(
-        request: Request,
-        env: WorkerEnv,
-        error: string | null = null,
+	request: Request,
+	env: WorkerEnv,
+	principal: ManagementPrincipal,
+	projectId: number,
+	error: string | null = null,
 ): Promise<Response> {
-        const [cases, members] =
-                await Promise.all([
-                        getCases(env.DB),
-                        getMembers(env.DB),
-                ]);
+	const [cases, members] = await Promise.all([
+		getCases(env.DB, principal.tenantId, projectId),
+		getMembers(env.DB, principal.tenantId, projectId),
+	]);
 
-        const updated = new URL(request.url)
-                .searchParams
-                .get("updated");
+	const updated = new URL(request.url).searchParams.get('updated');
 
-        const message =
-                updated === "approved"
-                        ? "Coordination case approved."
-                        : updated === "rejected"
-                                ? "Coordination case rejected."
-                                : updated === "scheduled"
-                                        ? "Meeting scheduled and participants notified."
-                                : updated === "resolved"
-                                        ? "Coordination case resolved."
-                                        : null;
+	const message =
+		updated === 'approved'
+			? 'Coordination case approved.'
+			: updated === 'rejected'
+				? 'Coordination case rejected.'
+				: updated === 'scheduled'
+					? 'Meeting scheduled and participants notified.'
+					: updated === 'resolved'
+						? 'Coordination case resolved.'
+						: null;
 
-        return htmlResponse(
-                page(
-                        cases,
-                        members,
-                        message,
-                        error,
-                ),
-                error ? 400 : 200,
-        );
+	return htmlResponse(page(cases, members, message, error), error ? 400 : 200);
 }
 
-
-async function getCase(
-        db: D1Database,
-        caseId: number,
-): Promise<CaseRow | null> {
-        return db
-                .prepare(
-                        `
+async function getCase(db: D1Database, caseId: number, tenantId: number, projectId: number): Promise<CaseRow | null> {
+	return db
+		.prepare(
+			`
                         SELECT
                                 coordination.id,
                                 coordination.requester_member_id,
@@ -1002,22 +804,18 @@ async function getCase(
                                 ON responsible.id
                                         = coordination.responsible_member_id
                         WHERE coordination.id = ?
+                                AND coordination.tenant_id = ?
+                                AND coordination.project_id = ?
                         `,
-                )
-                .bind(caseId)
-                .first<CaseRow>();
+		)
+		.bind(caseId, tenantId, projectId)
+		.first<CaseRow>();
 }
 
-
-async function recordManagerEvent(
-        db: D1Database,
-        caseId: number,
-        eventType: string,
-        details: string,
-): Promise<void> {
-        await db
-                .prepare(
-                        `
+async function recordManagerEvent(db: D1Database, caseId: number, eventType: string, details: string): Promise<void> {
+	await db
+		.prepare(
+			`
                         INSERT INTO case_events (
                                 case_id,
                                 event_type,
@@ -1026,60 +824,45 @@ async function recordManagerEvent(
                         )
                         VALUES (?, ?, 'manager', ?)
                         `,
-                )
-                .bind(
-                        caseId,
-                        eventType,
-                        details,
-                )
-                .run();
+		)
+		.bind(caseId, eventType, details)
+		.run();
 }
-
 
 function validMeetingLink(value: string): boolean {
-        if (!value || value.length > 2048) {
-                return false;
-        }
+	if (!value || value.length > 2048) {
+		return false;
+	}
 
-        try {
-                const url = new URL(value);
+	try {
+		const url = new URL(value);
 
-                return url.protocol === "https:"
-                        && Boolean(url.hostname)
-                        && !url.username
-                        && !url.password;
-        } catch {
-                return false;
-        }
+		return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password;
+	} catch {
+		return false;
+	}
 }
-
 
 function formatMeetingTime(value: string): string {
-        const date = new Date(value);
+	const date = new Date(value);
 
-        if (Number.isNaN(date.getTime())) {
-                return value;
-        }
+	if (Number.isNaN(date.getTime())) {
+		return value;
+	}
 
-        return new Intl.DateTimeFormat(
-                "en-US",
-                {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                        timeZone: "UTC",
-                },
-        ).format(date) + " UTC";
+	return (
+		new Intl.DateTimeFormat('en-US', {
+			dateStyle: 'medium',
+			timeStyle: 'short',
+			timeZone: 'UTC',
+		}).format(date) + ' UTC'
+	);
 }
 
-
-async function participantWasNotified(
-        db: D1Database,
-        caseId: number,
-        memberId: number,
-): Promise<boolean> {
-        const event = await db
-                .prepare(
-                        `
+async function participantWasNotified(db: D1Database, caseId: number, memberId: number): Promise<boolean> {
+	const event = await db
+		.prepare(
+			`
                         SELECT id
                         FROM case_events
                         WHERE case_id = ?
@@ -1088,22 +871,17 @@ async function participantWasNotified(
                                 AND actor_member_id = ?
                         LIMIT 1
                         `,
-                )
-                .bind(caseId, memberId)
-                .first<{ id: number }>();
+		)
+		.bind(caseId, memberId)
+		.first<{ id: number }>();
 
-        return Boolean(event);
+	return Boolean(event);
 }
 
-
-async function recordParticipantNotification(
-        db: D1Database,
-        caseId: number,
-        memberId: number,
-): Promise<void> {
-        await db
-                .prepare(
-                        `
+async function recordParticipantNotification(db: D1Database, caseId: number, memberId: number): Promise<void> {
+	await db
+		.prepare(
+			`
                         INSERT INTO case_events (
                                 case_id,
                                 event_type,
@@ -1119,218 +897,165 @@ async function recordParticipantNotification(
                                 'Meeting details sent by WhatsApp'
                         )
                         `,
-                )
-                .bind(caseId, memberId)
-                .run();
+		)
+		.bind(caseId, memberId)
+		.run();
 }
 
-
 async function notifyParticipants(
-        coordinationCase: CaseRow,
-        meetingLink: string,
-        env: WorkerEnv,
-        fetcher: Fetcher,
+	coordinationCase: CaseRow,
+	meetingLink: string,
+	env: WorkerEnv,
+	fetcher: Fetcher,
 ): Promise<string | null> {
-        if (
-                !coordinationCase.responsible_member_id
-                || !coordinationCase.proposed_time
-        ) {
-                return "The case is missing scheduling information.";
-        }
+	if (!coordinationCase.responsible_member_id || !coordinationCase.proposed_time) {
+		return 'The case is missing scheduling information.';
+	}
 
-        const participants = await env.DB
-                .prepare(
-                        `
+	const participants = await env.DB.prepare(
+		`
                         SELECT id, phone
                         FROM team_members
                         WHERE id IN (?, ?)
                         ORDER BY id
                         `,
-                )
-                .bind(
-                        coordinationCase.requester_member_id,
-                        coordinationCase.responsible_member_id,
-                )
-                .all<{
-                        id: number;
-                        phone: string;
-                }>();
+	)
+		.bind(coordinationCase.requester_member_id, coordinationCase.responsible_member_id)
+		.all<{
+			id: number;
+			phone: string;
+		}>();
 
-        if (participants.results.length !== 2) {
-                return "Both participants must exist before scheduling.";
-        }
+	if (participants.results.length !== 2) {
+		return 'Both participants must exist before scheduling.';
+	}
 
-        const message = [
-                "Discussion scheduled",
-                `Case #${coordinationCase.id}`,
-                `Time: ${formatMeetingTime(
-                        coordinationCase.proposed_time,
-                )}`,
-                `Duration: ${coordinationCase.meeting_duration_minutes} minutes`,
-                `Join: ${meetingLink}`,
-        ].join("\n");
+	const message = [
+		'Discussion scheduled',
+		`Case #${coordinationCase.id}`,
+		`Time: ${formatMeetingTime(coordinationCase.proposed_time)}`,
+		`Duration: ${coordinationCase.meeting_duration_minutes} minutes`,
+		`Join: ${meetingLink}`,
+	].join('\n');
 
-        for (const participant of participants.results) {
-                if (
-                        await participantWasNotified(
-                                env.DB,
-                                coordinationCase.id,
-                                participant.id,
-                        )
-                ) {
-                        continue;
-                }
+	for (const participant of participants.results) {
+		if (await participantWasNotified(env.DB, coordinationCase.id, participant.id)) {
+			continue;
+		}
 
-                const result = await sendTextMessage(
-                        env,
-                        participant.phone,
-                        message,
-                        fetcher,
-                );
+		const result = await sendTextMessage(env, participant.phone, message, fetcher);
 
-                if (!result.success) {
-                        return "Meeting link saved, but a WhatsApp notification failed. Submit again to retry.";
-                }
+		if (!result.success) {
+			return 'Meeting link saved, but a WhatsApp notification failed. Submit again to retry.';
+		}
 
-                await recordParticipantNotification(
-                        env.DB,
-                        coordinationCase.id,
-                        participant.id,
-                );
-        }
+		await recordParticipantNotification(env.DB, coordinationCase.id, participant.id);
+	}
 
-        return null;
+	return null;
 }
 
-
 async function processDecision(
-        form: FormData,
-        env: WorkerEnv,
-        fetcher: Fetcher,
+	form: FormData,
+	env: WorkerEnv,
+	fetcher: Fetcher,
+	principal: ManagementPrincipal,
+	projectId: number,
 ): Promise<{
-        error: string | null;
-        redirect: string | null;
+	error: string | null;
+	redirect: string | null;
 }> {
-        const caseId = Number(
-                form.get("case_id"),
-        );
+	const caseId = Number(form.get('case_id'));
 
-        const action = String(
-                form.get("action") ?? "",
-        );
+	const action = String(form.get('action') ?? '');
 
-        const notes = String(
-                form.get("manager_notes") ?? "",
-        ).trim();
+	const notes = String(form.get('manager_notes') ?? '').trim();
 
-        if (
-                !Number.isInteger(caseId)
-                || caseId <= 0
-        ) {
-                return {
-                        error: "Invalid coordination case.",
-                        redirect: null,
-                };
-        }
+	if (!Number.isInteger(caseId) || caseId <= 0) {
+		return {
+			error: 'Invalid coordination case.',
+			redirect: null,
+		};
+	}
 
-        if (notes.length > 500) {
-                return {
-                        error: "Manager notes are too long.",
-                        redirect: null,
-                };
-        }
+	if (notes.length > 500) {
+		return {
+			error: 'Manager notes are too long.',
+			redirect: null,
+		};
+	}
 
-        const coordinationCase =
-                await getCase(env.DB, caseId);
+	const coordinationCase = await getCase(env.DB, caseId, principal.tenantId, projectId);
 
-        if (!coordinationCase) {
-                return {
-                        error: "Coordination case was not found.",
-                        redirect: null,
-                };
-        }
+	if (!coordinationCase) {
+		return {
+			error: 'Coordination case was not found.',
+			redirect: null,
+		};
+	}
 
-        if (action === "approve") {
-                if (
-                        ![
-                                "pending_assignment",
-                                "pending_approval",
-                        ].includes(
-                                coordinationCase.status,
-                        )
-                ) {
-                        return {
-                                error:
-                                        "This case is no longer awaiting approval.",
-                                redirect: null,
-                        };
-                }
+	if (action === 'approve') {
+		if (!['pending_assignment', 'pending_approval'].includes(coordinationCase.status)) {
+			return {
+				error: 'This case is no longer awaiting approval.',
+				redirect: null,
+			};
+		}
 
-                const responsibleMemberId =
-                        Number(
-                                form.get(
-                                        "responsible_member_id",
-                                ),
-                        );
+		const responsibleMemberId = Number(form.get('responsible_member_id'));
 
-                const duration = Number(
-                        form.get(
-                                "meeting_duration_minutes",
-                        ),
-                );
+		const duration = Number(form.get('meeting_duration_minutes'));
 
-                if (
-                        !Number.isInteger(
-                                responsibleMemberId,
-                        )
-                        || responsibleMemberId <= 0
-                        || responsibleMemberId
-                                === coordinationCase.requester_member_id
-                ) {
-                        return {
-                                error:
-                                        "Select a valid responsible person.",
-                                redirect: null,
-                        };
-                }
+		if (
+			!Number.isInteger(responsibleMemberId) ||
+			responsibleMemberId <= 0 ||
+			responsibleMemberId === coordinationCase.requester_member_id
+		) {
+			return {
+				error: 'Select a valid responsible person.',
+				redirect: null,
+			};
+		}
 
-                if (!allowedDurations.has(duration)) {
-                        return {
-                                error:
-                                        "Select a valid discussion duration.",
-                                redirect: null,
-                        };
-                }
+		if (!allowedDurations.has(duration)) {
+			return {
+				error: 'Select a valid discussion duration.',
+				redirect: null,
+			};
+		}
 
-                const responsible =
-                        await env.DB
-                                .prepare(
-                                        `
+		const responsible = await env.DB.prepare(
+			`
                                         SELECT id, name
                                         FROM team_members
                                         WHERE id = ?
                                                 AND active = 1
+                                                AND tenant_id = ?
+                                                AND (
+                                                        primary_project_id = ?
+                                                        OR EXISTS (
+                                                                SELECT 1 FROM team_member_projects
+                                                                WHERE team_member_id = team_members.id
+                                                                        AND project_id = ?
+                                                        )
+                                                )
                                         `,
-                                )
-                                .bind(
-                                        responsibleMemberId,
-                                )
-                                .first<{
-                                        id: number;
-                                        name: string;
-                                }>();
+		)
+			.bind(responsibleMemberId, principal.tenantId, projectId, projectId)
+			.first<{
+				id: number;
+				name: string;
+			}>();
 
-                if (!responsible) {
-                        return {
-                                error:
-                                        "Responsible person was not found.",
-                                redirect: null,
-                        };
-                }
+		if (!responsible) {
+			return {
+				error: 'Responsible person was not found.',
+				redirect: null,
+			};
+		}
 
-                await env.DB
-                        .prepare(
-                                `
+		await env.DB.prepare(
+			`
                                 UPDATE coordination_cases
                                 SET
                                         responsible_member_id = ?,
@@ -1341,49 +1066,28 @@ async function processDecision(
                                         updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ?
                                 `,
-                        )
-                        .bind(
-                                responsible.id,
-                                duration,
-                                notes || null,
-                                caseId,
-                        )
-                        .run();
+		)
+			.bind(responsible.id, duration, notes || null, caseId)
+			.run();
 
-                await recordManagerEvent(
-                        env.DB,
-                        caseId,
-                        "case_approved",
-                        `Approved and assigned to ${
-                                responsible.name
-                        }`,
-                );
+		await recordManagerEvent(env.DB, caseId, 'case_approved', `Approved and assigned to ${responsible.name}`);
 
-                return {
-                        error: null,
-                        redirect: "approved",
-                };
-        }
+		return {
+			error: null,
+			redirect: 'approved',
+		};
+	}
 
-        if (action === "reject") {
-                if (
-                        ![
-                                "pending_assignment",
-                                "pending_approval",
-                        ].includes(
-                                coordinationCase.status,
-                        )
-                ) {
-                        return {
-                                error:
-                                        "This case cannot be rejected now.",
-                                redirect: null,
-                        };
-                }
+	if (action === 'reject') {
+		if (!['pending_assignment', 'pending_approval'].includes(coordinationCase.status)) {
+			return {
+				error: 'This case cannot be rejected now.',
+				redirect: null,
+			};
+		}
 
-                await env.DB
-                        .prepare(
-                                `
+		await env.DB.prepare(
+			`
                                 UPDATE coordination_cases
                                 SET
                                         status = 'rejected',
@@ -1391,64 +1095,44 @@ async function processDecision(
                                         updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ?
                                 `,
-                        )
-                        .bind(
-                                notes || null,
-                                caseId,
-                        )
-                        .run();
+		)
+			.bind(notes || null, caseId)
+			.run();
 
-                await recordManagerEvent(
-                        env.DB,
-                        caseId,
-                        "case_rejected",
-                        notes || "Rejected by manager",
-                );
+		await recordManagerEvent(env.DB, caseId, 'case_rejected', notes || 'Rejected by manager');
 
-                return {
-                        error: null,
-                        redirect: "rejected",
-                };
-        }
+		return {
+			error: null,
+			redirect: 'rejected',
+		};
+	}
 
-        if (action === "schedule") {
-                const meetingLink = String(
-                        form.get("meeting_link") ?? "",
-                ).trim();
+	if (action === 'schedule') {
+		const meetingLink = String(form.get('meeting_link') ?? '').trim();
 
-                if (
-                        coordinationCase.status === "scheduled"
-                        && coordinationCase.meeting_link === meetingLink
-                ) {
-                        return {
-                                error: null,
-                                redirect: "scheduled",
-                        };
-                }
+		if (coordinationCase.status === 'scheduled' && coordinationCase.meeting_link === meetingLink) {
+			return {
+				error: null,
+				redirect: 'scheduled',
+			};
+		}
 
-                if (
-                        coordinationCase.status !== "time_agreed"
-                        || !coordinationCase.proposed_time
-                        || !coordinationCase.responsible_member_id
-                ) {
-                        return {
-                                error:
-                                        "A meeting link can only be added after a common time is agreed.",
-                                redirect: null,
-                        };
-                }
+		if (coordinationCase.status !== 'time_agreed' || !coordinationCase.proposed_time || !coordinationCase.responsible_member_id) {
+			return {
+				error: 'A meeting link can only be added after a common time is agreed.',
+				redirect: null,
+			};
+		}
 
-                if (!validMeetingLink(meetingLink)) {
-                        return {
-                                error:
-                                        "Enter a valid HTTPS meeting link.",
-                                redirect: null,
-                        };
-                }
+		if (!validMeetingLink(meetingLink)) {
+			return {
+				error: 'Enter a valid HTTPS meeting link.',
+				redirect: null,
+			};
+		}
 
-                await env.DB
-                        .prepare(
-                                `
+		await env.DB.prepare(
+			`
                                 UPDATE coordination_cases
                                 SET
                                         meeting_link = ?,
@@ -1456,28 +1140,21 @@ async function processDecision(
                                 WHERE id = ?
                                         AND status = 'time_agreed'
                                 `,
-                        )
-                        .bind(meetingLink, caseId)
-                        .run();
+		)
+			.bind(meetingLink, caseId)
+			.run();
 
-                const notificationError =
-                        await notifyParticipants(
-                                coordinationCase,
-                                meetingLink,
-                                env,
-                                fetcher,
-                        );
+		const notificationError = await notifyParticipants(coordinationCase, meetingLink, env, fetcher);
 
-                if (notificationError) {
-                        return {
-                                error: notificationError,
-                                redirect: null,
-                        };
-                }
+		if (notificationError) {
+			return {
+				error: notificationError,
+				redirect: null,
+			};
+		}
 
-                await env.DB
-                        .prepare(
-                                `
+		await env.DB.prepare(
+			`
                                 UPDATE coordination_cases
                                 SET
                                         status = 'scheduled',
@@ -1485,53 +1162,35 @@ async function processDecision(
                                 WHERE id = ?
                                         AND status = 'time_agreed'
                                 `,
-                        )
-                        .bind(caseId)
-                        .run();
+		)
+			.bind(caseId)
+			.run();
 
-                await recordManagerEvent(
-                        env.DB,
-                        caseId,
-                        "meeting_scheduled",
-                        "Meeting link saved and participants notified",
-                );
+		await recordManagerEvent(env.DB, caseId, 'meeting_scheduled', 'Meeting link saved and participants notified');
 
-                return {
-                        error: null,
-                        redirect: "scheduled",
-                };
-        }
+		return {
+			error: null,
+			redirect: 'scheduled',
+		};
+	}
 
-        if (action === "resolve") {
-                if (
-                        ![
-                                "approved",
-                                "availability_requested",
-                                "time_agreed",
-                                "scheduled",
-                                "in_progress",
-                        ].includes(
-                                coordinationCase.status,
-                        )
-                ) {
-                        return {
-                                error:
-                                        "This case cannot be resolved from its current status.",
-                                redirect: null,
-                        };
-                }
+	if (action === 'resolve') {
+		if (!['approved', 'availability_requested', 'time_agreed', 'scheduled', 'in_progress'].includes(coordinationCase.status)) {
+			return {
+				error: 'This case cannot be resolved from its current status.',
+				redirect: null,
+			};
+		}
 
-                if (!notes) {
-                        return {
-                                error:
-                                        "Enter a resolution note.",
-                                redirect: null,
-                        };
-                }
+		if (!notes) {
+			return {
+				error: 'Enter a resolution note.',
+				redirect: null,
+			};
+		}
 
-                await env.DB
-                        .prepare(
-                                `
+		await env.DB.prepare(
+			`
                                 UPDATE coordination_cases
                                 SET
                                         status = 'resolved',
@@ -1540,92 +1199,73 @@ async function processDecision(
                                         updated_at = CURRENT_TIMESTAMP
                                 WHERE id = ?
                                 `,
-                        )
-                        .bind(
-                                notes,
-                                caseId,
-                        )
-                        .run();
+		)
+			.bind(notes, caseId)
+			.run();
 
-                await recordManagerEvent(
-                        env.DB,
-                        caseId,
-                        "case_resolved",
-                        notes,
-                );
+		await recordManagerEvent(env.DB, caseId, 'case_resolved', notes);
 
-                return {
-                        error: null,
-                        redirect: "resolved",
-                };
-        }
+		return {
+			error: null,
+			redirect: 'resolved',
+		};
+	}
 
-        return {
-                error: "Invalid manager action.",
-                redirect: null,
-        };
+	return {
+		error: 'Invalid manager action.',
+		redirect: null,
+	};
 }
 
+export async function caseManagementResponse(request: Request, env: WorkerEnv, fetcher: Fetcher = fetch): Promise<Response> {
+	if (!isAuthorised(request, env)) {
+		return authenticationRequired();
+	}
 
-export async function caseManagementResponse(
-        request: Request,
-        env: WorkerEnv,
-        fetcher: Fetcher = fetch,
-): Promise<Response> {
-        if (!isAuthorised(request, env)) {
-                return authenticationRequired();
-        }
+	const principal = managementPrincipalFromRequest(request) ?? {
+		userId: 1,
+		tenantId: 1,
+		role: 'admin' as const,
+	};
+	const projectId = Number(new URL(request.url).searchParams.get('project') ?? 1);
+	if (!Number.isSafeInteger(projectId) || projectId <= 0) {
+		return new Response('Invalid project.', { status: 400 });
+	}
+	try {
+		await requireProjectAccess(env.DB, principal, projectId);
+	} catch {
+		return new Response('Project access denied.', { status: 403 });
+	}
 
-        if (request.method === "GET") {
-                return renderPage(request, env);
-        }
+	if (request.method === 'GET') {
+		return renderPage(request, env, principal, projectId);
+	}
 
-        if (request.method !== "POST") {
-                return new Response(
-                        "Method not allowed.",
-                        {
-                                status: 405,
-                                headers: {
-                                        Allow: "GET, POST",
-                                },
-                        },
-                );
-        }
+	if (request.method !== 'POST') {
+		return new Response('Method not allowed.', {
+			status: 405,
+			headers: {
+				Allow: 'GET, POST',
+			},
+		});
+	}
 
-        if (!validOrigin(request)) {
-                return new Response(
-                        "Invalid request origin.",
-                        { status: 403 },
-                );
-        }
+	if (!validOrigin(request)) {
+		return new Response('Invalid request origin.', { status: 403 });
+	}
 
-        const form = await request.formData();
+	const form = await request.formData();
 
-        const decision =
-                await processDecision(
-                        form,
-                        env,
-                        fetcher,
-                );
+	const decision = await processDecision(form, env, fetcher, principal, projectId);
 
-        if (decision.error) {
-                return renderPage(
-                        request,
-                        env,
-                        decision.error,
-                );
-        }
+	if (decision.error) {
+		return renderPage(request, env, principal, projectId, decision.error);
+	}
 
-        return new Response(
-                null,
-                {
-                        status: 303,
-                        headers: {
-                                Location:
-                                        `/dashboard/cases?updated=${
-                                                decision.redirect
-                                        }`,
-                        },
-                },
-        );
+	return new Response(null, {
+		status: 303,
+		headers: {
+			Location: `/dashboard/cases?updated=${decision.redirect}`,
+		},
+	});
 }
