@@ -207,6 +207,30 @@ async function getOpenCaseCount(
         return result?.count ?? 0;
 }
 
+async function getVoiceUpdateCounts(
+        db: D1Database,
+): Promise<{
+        awaiting: number;
+        failed: number;
+}> {
+        const result = await db.prepare(`
+                SELECT
+                        SUM(CASE WHEN status = 'awaiting_confirmation' THEN 1 ELSE 0 END)
+                                AS awaiting,
+                        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)
+                                AS failed
+                FROM voice_updates
+        `).first<{
+                awaiting: number | null;
+                failed: number | null;
+        }>();
+
+        return {
+                awaiting: result?.awaiting ?? 0,
+                failed: result?.failed ?? 0,
+        };
+}
+
 async function getHistoryRows(db: D1Database): Promise<HistoryRow[]> {
         const result = await db.prepare(`
                 SELECT member.name, member.department, member.timezone,
@@ -349,9 +373,11 @@ export async function createDashboardResponse(
         const [
                 databaseRows,
                 openCases,
+                voiceCounts,
         ] = await Promise.all([
                 getDashboardRows(env.DB),
                 getOpenCaseCount(env.DB),
+                getVoiceUpdateCounts(env.DB),
         ]);
 
         const rows: PreparedDashboardRow[] =
@@ -600,7 +626,7 @@ export async function createDashboardResponse(
                 .cards {
                         display: grid;
                         grid-template-columns:
-                                repeat(5, minmax(150px, 1fr));
+                                repeat(auto-fit, minmax(170px, 1fr));
                         gap: 15px;
                         margin: 24px 0;
                 }
@@ -630,6 +656,14 @@ export async function createDashboardResponse(
 
                 .case-value {
                         color: #7c3aed;
+                }
+
+                .voice-value {
+                        color: #0f766e;
+                }
+
+                .failure-value {
+                        color: #b91c1c;
                 }
 
                 .table-wrap {
@@ -803,6 +837,24 @@ export async function createDashboardResponse(
                                 </div>
                                 <div class="value case-value">
                                         ${openCases}
+                                </div>
+                        </div>
+
+                        <div class="card">
+                                <div class="label">
+                                        Voice updates awaiting confirmation
+                                </div>
+                                <div class="value voice-value">
+                                        ${voiceCounts.awaiting}
+                                </div>
+                        </div>
+
+                        <div class="card">
+                                <div class="label">
+                                        Voice transcription failures
+                                </div>
+                                <div class="value failure-value">
+                                        ${voiceCounts.failed}
                                 </div>
                         </div>
                 </section>

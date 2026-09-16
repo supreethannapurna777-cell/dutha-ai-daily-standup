@@ -29,6 +29,13 @@ import {
         sendTextMessage,
 } from "./whatsapp";
 import {
+        acceptVoiceUpdate,
+        createExternalVoiceTranscriber,
+        defaultVoiceSender,
+        processVoiceUpdate,
+        retryFailedVoiceUpdates,
+} from "./voice-update";
+import {
         authenticatedManagementRequest,
         loginResponse,
         logoutResponse,
@@ -88,6 +95,7 @@ function verifyWebhook(
 async function receiveWebhook(
         request: Request,
         env: WorkerEnv,
+        context: ExecutionContext,
 ): Promise<Response> {
         if (!env.WHATSAPP_APP_SECRET) {
                 return jsonResponse(
@@ -145,6 +153,25 @@ async function receiveWebhook(
                                         recipient,
                                         text,
                                 ),
+                        async (message) => {
+                                const id = await acceptVoiceUpdate(
+                                        env.DB,
+                                        message,
+                                );
+                                if (!id) {
+                                        return false;
+                                }
+
+                                context.waitUntil(
+                                        processVoiceUpdate(
+                                                env.DB,
+                                                id,
+                                                createExternalVoiceTranscriber(env),
+                                                defaultVoiceSender(env),
+                                        ),
+                                );
+                                return true;
+                        },
                 );
 
         console.log(
@@ -169,7 +196,7 @@ export default {
         async fetch(
                 request: Request,
                 env: WorkerEnv,
-                _context: ExecutionContext,
+                context: ExecutionContext,
         ): Promise<Response> {
                 const url = new URL(request.url);
 
@@ -203,6 +230,7 @@ export default {
                         return receiveWebhook(
                                 request,
                                 env,
+                                context,
                         );
                 }
 
@@ -307,11 +335,14 @@ export default {
                 context: ExecutionContext,
         ): Promise<void> {
                 context.waitUntil(
-                        runScheduledAction(
-                                controller.cron,
-                                controller.scheduledTime,
-                                env,
-                        ).then(() => undefined),
+                        Promise.all([
+                                runScheduledAction(
+                                        controller.cron,
+                                        controller.scheduledTime,
+                                        env,
+                                ),
+                                retryFailedVoiceUpdates(env),
+                        ]).then(() => undefined),
                 );
         },
 } satisfies ExportedHandler<WorkerEnv>;

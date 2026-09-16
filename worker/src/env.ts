@@ -13,4 +13,7 @@ export interface WorkerEnv {
     DASHBOARD_PASSWORD: string;
     DASHBOARD_SESSION_SECRET?: string;
     WHATSAPP_APP_SECRET: string;
+	TRANSCRIPTION_API_KEY?: string;
+	TRANSCRIPTION_API_URL?: string;
+	TRANSCRIPTION_MODEL?: string;
 }

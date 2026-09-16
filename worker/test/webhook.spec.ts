@@ -4,6 +4,7 @@ import {
 	describe,
 	expect,
 	it,
+	vi,
 } from "vitest";
 
 import { processWebhookPayload } from "../src/webhook";
@@ -49,6 +50,22 @@ function textWebhookPayload(
 			},
 		],
 	};
+}
+
+
+function audioWebhookPayload(
+	messageId = "wamid.voice-webhook-001",
+) {
+	const payload = textWebhookPayload(messageId);
+	const message = payload.entry[0].changes[0].value.messages[0] as
+		Record<string, unknown>;
+	message.type = "audio";
+	delete message.text;
+	message.audio = {
+		id: "media-webhook-001",
+		mime_type: "audio/ogg; codecs=opus",
+	};
+	return payload;
 }
 
 
@@ -183,6 +200,31 @@ describe("WhatsApp webhook processing", () => {
 			received: 0,
 			duplicates: 0,
 			ignored: 1,
+		});
+	});
+
+	it("routes an audio message to the voice receiver", async () => {
+		const receiver = vi.fn().mockResolvedValue(true);
+		const result = await processWebhookPayload(
+			audioWebhookPayload(),
+			env.DB,
+			new Date(),
+			undefined,
+			receiver,
+		);
+
+		expect(result).toEqual({
+			received: 1,
+			duplicates: 0,
+			ignored: 0,
+		});
+		expect(receiver).toHaveBeenCalledWith({
+			whatsappMessageId: "wamid.voice-webhook-001",
+			senderName: "Test User",
+			senderPhone: "919100000000",
+			receivedAt: "2023-11-14T22:13:20.000Z",
+			mediaId: "media-webhook-001",
+			mimeType: "audio/ogg; codecs=opus",
 		});
 	});
 

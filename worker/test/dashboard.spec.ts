@@ -124,6 +124,12 @@ describe("secure timezone-aware dashboard", () => {
                                 "DELETE FROM incoming_messages",
                         ),
                         env.DB.prepare(
+                                "DELETE FROM voice_update_events",
+                        ),
+                        env.DB.prepare(
+                                "DELETE FROM voice_updates",
+                        ),
+                        env.DB.prepare(
                                 "DELETE FROM team_members",
                         ),
                 ]);
@@ -207,6 +213,12 @@ describe("secure timezone-aware dashboard", () => {
                 );
                 expect(html).toContain(
                         "Open coordination cases",
+                );
+                expect(html).toContain(
+                        "Voice updates awaiting confirmation",
+                );
+                expect(html).toContain(
+                        "Voice transcription failures",
                 );
                 expect(html).toContain(
                         "Asia/Kolkata",

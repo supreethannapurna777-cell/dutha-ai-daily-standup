@@ -8,6 +8,10 @@ import {
         extractUpdate,
         type ExtractedUpdate,
 } from "./extract-update";
+import {
+        processVoiceReply,
+        type IncomingVoiceMessage,
+} from "./voice-update";
 
 
 interface StoredMessage {
@@ -34,6 +38,11 @@ export type AvailabilityReplySender = (
         success: boolean;
         error?: string;
 }>;
+
+
+export type VoiceMessageReceiver = (
+        message: IncomingVoiceMessage,
+) => Promise<boolean>;
 
 
 function timestampToIso(
@@ -314,6 +323,7 @@ export async function processWebhookPayload(
         now = new Date(),
         availabilityReplySender?:
                 AvailabilityReplySender,
+        voiceMessageReceiver?: VoiceMessageReceiver,
 ): Promise<WebhookResult> {
         const result: WebhookResult = {
                 received: 0,
@@ -450,10 +460,66 @@ export async function processWebhookPayload(
                                                 unknown
                                         >;
 
-                                if (
-                                        message.type
-                                                !== "text"
-                                ) {
+                                const messageId =
+                                        typeof message.id
+                                                === "string"
+                                                ? message.id
+                                                        .trim()
+                                                : "";
+
+                                const receivedAt = timestampToIso(
+                                        message.timestamp,
+                                        now,
+                                );
+
+                                const senderPhone =
+                                        typeof message.from
+                                                === "string"
+                                                ? message.from
+                                                        .trim()
+                                                : "";
+
+                                if (message.type === "audio") {
+                                        const audio =
+                                                typeof message.audio === "object"
+                                                && message.audio !== null
+                                                        ? message.audio as Record<string, unknown>
+                                                        : {};
+                                        const mediaId = typeof audio.id === "string"
+                                                ? audio.id.trim()
+                                                : "";
+                                        const mimeType = typeof audio.mime_type === "string"
+                                                ? audio.mime_type.trim()
+                                                : undefined;
+
+                                        if (
+                                                !messageId
+                                                || !senderPhone
+                                                || !mediaId
+                                                || !voiceMessageReceiver
+                                        ) {
+                                                result.ignored += 1;
+                                                continue;
+                                        }
+
+                                        const accepted = await voiceMessageReceiver({
+                                                whatsappMessageId: messageId,
+                                                senderName: contactName,
+                                                senderPhone,
+                                                receivedAt,
+                                                mediaId,
+                                                mimeType,
+                                        });
+
+                                        if (accepted) {
+                                                result.received += 1;
+                                        } else {
+                                                result.duplicates += 1;
+                                        }
+                                        continue;
+                                }
+
+                                if (message.type !== "text") {
                                         result.ignored += 1;
                                         continue;
                                 }
@@ -468,20 +534,6 @@ export async function processWebhookPayload(
                                                         unknown
                                                 >
                                                 : {};
-
-                                const messageId =
-                                        typeof message.id
-                                                === "string"
-                                                ? message.id
-                                                        .trim()
-                                                : "";
-
-                                const senderPhone =
-                                        typeof message.from
-                                                === "string"
-                                                ? message.from
-                                                        .trim()
-                                                : "";
 
                                 const text =
                                         typeof textObject.body
@@ -499,16 +551,41 @@ export async function processWebhookPayload(
                                         continue;
                                 }
 
+                                const voiceReply = await processVoiceReply(
+                                        db,
+                                        senderPhone,
+                                        messageId,
+                                        text,
+                                        availabilityReplySender,
+                                );
+
+                                if (voiceReply.handled) {
+                                        if (voiceReply.duplicate) {
+                                                result.duplicates += 1;
+                                                continue;
+                                        }
+
+                                        if (
+                                                voiceReply.confirmed
+                                                && voiceReply.processedUpdateId
+                                        ) {
+                                                await safelyCreateCoordinationCase(
+                                                        db,
+                                                        voiceReply.processedUpdateId,
+                                                );
+                                        }
+
+                                        result.received += 1;
+                                        continue;
+                                }
+
                                 const stored =
                                         await storeMessage(
                                                 db,
                                                 messageId,
                                                 contactName,
                                                 senderPhone,
-                                                timestampToIso(
-                                                        message.timestamp,
-                                                        now,
-                                                ),
+                                                receivedAt,
                                                 text,
                                         );
 
