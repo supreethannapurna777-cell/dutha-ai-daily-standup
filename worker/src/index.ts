@@ -30,7 +30,7 @@ import {
 } from "./whatsapp";
 import {
         acceptVoiceUpdate,
-        createExternalVoiceTranscriber,
+        createCloudflareVoiceTranscriber,
         defaultVoiceSender,
         processVoiceUpdate,
         retryFailedVoiceUpdates,
@@ -166,7 +166,7 @@ async function receiveWebhook(
                                         processVoiceUpdate(
                                                 env.DB,
                                                 id,
-                                                createExternalVoiceTranscriber(env),
+                                                createCloudflareVoiceTranscriber(env),
                                                 defaultVoiceSender(env),
                                         ),
                                 );

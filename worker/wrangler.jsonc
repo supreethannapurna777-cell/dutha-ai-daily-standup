@@ -7,6 +7,10 @@
                 "enabled": true
         },
         "upload_source_maps": true,
+        "ai": {
+                "binding": "AI",
+                "remote": true
+        },
         "vars": {
                 "WHATSAPP_API_VERSION": "v26.0",
                 "WHATSAPP_TEMPLATE_LANGUAGE": "en_US",

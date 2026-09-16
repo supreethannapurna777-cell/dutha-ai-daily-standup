@@ -9,7 +9,7 @@ import {
 
 import {
         acceptVoiceUpdate,
-        createExternalVoiceTranscriber,
+        createCloudflareVoiceTranscriber,
         processVoiceReply,
         processVoiceUpdate,
 } from "../src/voice-update";
@@ -213,7 +213,7 @@ describe("WhatsApp voice updates", () => {
                 });
         });
 
-        it("downloads Meta media and sends it to the configured transcriber", async () => {
+        it("downloads Meta media and sends it to Cloudflare Workers AI", async () => {
                 const fetcher = vi.fn()
                         .mockResolvedValueOnce(Response.json({
                                 url: "https://media.example/voice",
@@ -225,20 +225,20 @@ describe("WhatsApp voice updates", () => {
                                                 "Content-Type": "audio/ogg",
                                         },
                                 },
-                        ))
-                        .mockResolvedValueOnce(Response.json({
-                                text: "Deploy the Worker today",
+                        ));
+                const run = vi.fn().mockResolvedValue({
+                        text: "Deploy the Worker today",
+                        transcription_info: {
                                 language: "en",
-                        }));
+                        },
+                });
                 const voiceEnv = {
                         WHATSAPP_API_VERSION: "v26.0",
                         WHATSAPP_ACCESS_TOKEN: "meta-token",
-                        TRANSCRIPTION_API_KEY: "transcription-token",
-                        TRANSCRIPTION_API_URL: "https://transcribe.example/v1",
-                        TRANSCRIPTION_MODEL: "test-model",
+                        AI: { run },
                 } as WorkerEnv;
 
-                const transcribe = createExternalVoiceTranscriber(
+                const transcribe = createCloudflareVoiceTranscriber(
                         voiceEnv,
                         fetcher,
                 );
@@ -251,13 +251,15 @@ describe("WhatsApp voice updates", () => {
                         text: "Deploy the Worker today",
                         language: "en",
                 });
-                expect(fetcher).toHaveBeenCalledTimes(3);
+                expect(fetcher).toHaveBeenCalledTimes(2);
                 expect(fetcher.mock.calls[0][0]).toContain("/media-001");
-                expect(fetcher.mock.calls[2][0]).toBe(
-                        "https://transcribe.example/v1",
+                expect(run).toHaveBeenCalledWith(
+                        "@cf/openai/whisper-large-v3-turbo",
+                        expect.objectContaining({
+                                audio: expect.any(String),
+                                task: "transcribe",
+                                vad_filter: true,
+                        }),
                 );
-                const form = fetcher.mock.calls[2][1]?.body as FormData;
-                expect(form.get("model")).toBe("test-model");
-                expect(form.get("file")).toBeInstanceOf(File);
         });
 });

@@ -432,30 +432,34 @@ export async function processVoiceReply(
 }
 
 
-function extensionForMimeType(mimeType?: string): string {
-        const base = String(mimeType ?? "audio/ogg")
-                .split(";", 1)[0]
-                .toLowerCase();
-        const extensions: Record<string, string> = {
-                "audio/ogg": "ogg",
-                "audio/opus": "opus",
-                "audio/mpeg": "mp3",
-                "audio/mp4": "m4a",
-                "audio/wav": "wav",
-                "audio/webm": "webm",
-        };
-        return extensions[base] ?? "ogg";
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+        const bytes = new Uint8Array(buffer);
+        const chunks: string[] = [];
+        const chunkSize = 32_768;
+
+        for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+                chunks.push(
+                        String.fromCharCode(
+                                ...bytes.subarray(
+                                        offset,
+                                        offset + chunkSize,
+                                ),
+                        ),
+                );
+        }
+
+        return btoa(chunks.join(""));
 }
 
 
-export function createExternalVoiceTranscriber(
+export function createCloudflareVoiceTranscriber(
         env: WorkerEnv,
         fetcher: Fetcher = fetch,
 ): VoiceTranscriber {
         return async (mediaId, declaredMimeType) => {
                 if (
                         !env.WHATSAPP_ACCESS_TOKEN
-                        || !env.TRANSCRIPTION_API_KEY
+                        || !env.AI
                 ) {
                         throw new Error("Voice transcription is not configured.");
                 }
@@ -489,62 +493,26 @@ export function createExternalVoiceTranscriber(
                         throw new Error("Voice note exceeds the 10 MB prototype limit.");
                 }
 
-                const mimeType = mediaResponse.headers.get("Content-Type")
-                        ?? declaredMimeType
-                        ?? "audio/ogg";
                 const audio = await mediaResponse.arrayBuffer();
                 if (audio.byteLength > 10 * 1024 * 1024) {
                         throw new Error("Voice note exceeds the 10 MB prototype limit.");
                 }
 
-                const form = new FormData();
-                form.append(
-                        "file",
-                        new File(
-                                [audio],
-                                `voice.${extensionForMimeType(mimeType)}`,
-                                { type: mimeType },
-                        ),
-                );
-                form.append(
-                        "model",
-                        env.TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe",
-                );
-                form.append("response_format", "json");
-
-                const transcriptionResponse = await fetcher(
-                        env.TRANSCRIPTION_API_URL
-                                || "https://api.openai.com/v1/audio/transcriptions",
+                const responseBody = await env.AI.run(
+                        "@cf/openai/whisper-large-v3-turbo",
                         {
-                                method: "POST",
-                                headers: {
-                                        Authorization: `Bearer ${env.TRANSCRIPTION_API_KEY}`,
-                                },
-                                body: form,
+                                audio: arrayBufferToBase64(audio),
+                                task: "transcribe",
+                                vad_filter: true,
+                                initial_prompt:
+                                        "A concise employee project status update containing tasks, blockers, dependencies, people, and expected completion.",
                         },
                 );
-                const responseBody = await transcriptionResponse.json() as
-                        Record<string, unknown>;
-                if (
-                        !transcriptionResponse.ok
-                        || typeof responseBody.text !== "string"
-                ) {
-                        const error = typeof responseBody.error === "object"
-                                && responseBody.error !== null
-                                ? responseBody.error as Record<string, unknown>
-                                : {};
-                        throw new Error(
-                                typeof error.message === "string"
-                                        ? error.message
-                                        : "Voice transcription failed.",
-                        );
-                }
 
                 return {
                         text: responseBody.text,
-                        language: typeof responseBody.language === "string"
-                                ? responseBody.language
-                                : undefined,
+                        language:
+                                responseBody.transcription_info?.language,
                 };
         };
 }
@@ -562,7 +530,7 @@ export async function retryFailedVoiceUpdates(
         env: WorkerEnv,
         limit = 5,
 ): Promise<number> {
-        if (!env.TRANSCRIPTION_API_KEY) {
+        if (!env.AI) {
                 return 0;
         }
 
@@ -579,7 +547,7 @@ export async function retryFailedVoiceUpdates(
                 await processVoiceUpdate(
                         env.DB,
                         voice.id,
-                        createExternalVoiceTranscriber(env),
+                        createCloudflareVoiceTranscriber(env),
                         defaultVoiceSender(env),
                 );
         }
