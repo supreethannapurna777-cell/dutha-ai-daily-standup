@@ -50,6 +50,7 @@ import {
 } from "./jira-webhook";
 import { teamsWebhookResponse } from "./teams";
 import { recoverIntegrationPipeline } from "./pipeline-reliability";
+import { deploymentPreflightResponse } from "./deployment-preflight";
 
 export type { WorkerEnv } from "./env";
 
@@ -326,6 +327,10 @@ export default {
                                 managementRequest,
                                 env,
                         );
+                }
+
+                if (request.method === "GET" && url.pathname === "/dashboard/preflight") {
+                        return deploymentPreflightResponse(env);
                 }
 
                 if (
