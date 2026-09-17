@@ -2,6 +2,7 @@ import type { WorkerEnv } from './env';
 import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
 import { sendTextMessage, type Fetcher } from './whatsapp';
 import { jiraConfigFromEnv, syncApprovedCaseToJira } from './jira-sync';
+import { atlassianMcpConfigFromEnv } from './atlassian-mcp';
 
 interface CaseRow {
 	id: number;
@@ -1146,6 +1147,7 @@ async function processDecision(
 					caseId,
 					jiraConfig,
 					fetcher,
+					atlassianMcpConfigFromEnv(env),
 				);
 				console.log(JSON.stringify({
 					event: 'jira_case_sync_completed',

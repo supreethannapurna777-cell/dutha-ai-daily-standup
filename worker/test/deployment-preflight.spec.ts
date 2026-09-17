@@ -11,6 +11,7 @@ const readyEnv = {
         WHATSAPP_APP_SECRET: "app-secret", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify",
         JIRA_BASE_URL: "https://example.atlassian.net", JIRA_EMAIL: "jira@example.com",
         JIRA_API_TOKEN: "jira-token", JIRA_PROJECT_KEY: "DUTHA", JIRA_WEBHOOK_SECRET: "webhook",
+        ATLASSIAN_MCP_EMAIL: "mcp@example.com", ATLASSIAN_MCP_API_TOKEN: "mcp-token",
         MICROSOFT_APP_ID: "app-id", MICROSOFT_APP_PASSWORD: "app-password",
 } as WorkerEnv;
 
@@ -34,11 +35,12 @@ describe("deployment preflight", () => {
                 expect(text).not.toContain("app-password");
         });
 
-        it("confirms migrations 0008 through 0013 produced the required schema", async () => {
+        it("confirms migrations 0008 through 0014 produced the required schema", async () => {
                 const expectedTables = [
                         "channel_identities", "enrolment_invites", "channel_identity_events",
                         "jira_case_links", "jira_webhook_events", "channel_notification_outbox",
                         "teams_conversation_references", "integration_operation_events",
+                        "atlassian_mcp_context",
                 ];
                 const tables = (await env.DB.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all<{ name: string }>()).results.map((row) => row.name);
                 for (const table of expectedTables) expect(tables).toContain(table);

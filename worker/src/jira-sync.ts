@@ -1,5 +1,6 @@
 import type { WorkerEnv } from "./env";
 import type { Fetcher } from "./whatsapp";
+import { loadAtlassianContext, type AtlassianMcpConfig } from "./atlassian-mcp";
 
 export interface JiraConfig {
         baseUrl: string;
@@ -49,14 +50,15 @@ export function jiraConfigFromEnv(env: WorkerEnv): JiraConfig | null {
         };
 }
 
-function jiraDescription(item: JiraCase): object {
+function jiraDescription(item: JiraCase, atlassianContext?: string): object {
         const lines = [
                 `Requester: ${item.requester_name}`,
                 `Responsible: ${item.responsible_name ?? "Not assigned"}`,
                 `Priority: ${item.priority}`,
                 `SLA due: ${item.sla_due_at ?? "Not set"}`,
                 `Dutha case: ${item.id}`,
-        ];
+	];
+	if (atlassianContext) lines.push(`Related Atlassian context: ${atlassianContext.slice(0, 3000)}`);
         return {
                 type: "doc",
                 version: 1,
@@ -102,10 +104,11 @@ async function markFailed(
 }
 
 export async function syncApprovedCaseToJira(
-        db: D1Database,
-        caseId: number,
-        config: JiraConfig,
-        fetcher: Fetcher = fetch,
+	db: D1Database,
+	caseId: number,
+	config: JiraConfig,
+	fetcher: Fetcher = fetch,
+	mcpConfig: AtlassianMcpConfig | null = null,
 ): Promise<JiraSyncResult> {
         const item = await db.prepare(`
                 SELECT coordination.id, coordination.tenant_id,
@@ -161,7 +164,8 @@ export async function syncApprovedCaseToJira(
                 WHERE case_id = ?
         `).bind(caseId).run();
 
-        let response: Response;
+	const atlassianContext = await loadAtlassianContext(db, caseId, mcpConfig, fetcher);
+	let response: Response;
         try {
                 response = await fetcher(`${config.baseUrl}/rest/api/3/issue`, {
                         method: "POST",
@@ -175,7 +179,7 @@ export async function syncApprovedCaseToJira(
                                         project: { key: config.projectKey },
                                         issuetype: { name: config.issueType },
                                         summary: `[Dutha] ${item.issue_summary}`.slice(0, 255),
-                                        description: jiraDescription(item),
+					description: jiraDescription(item, atlassianContext),
                                         labels: [jiraCaseLabel(item)],
                                 },
                         }),
@@ -211,9 +215,10 @@ export async function syncApprovedCaseToJira(
 }
 
 export async function retryPendingJiraSyncs(
-        db: D1Database,
-        config: JiraConfig,
-        fetcher: Fetcher = fetch,
+	db: D1Database,
+	config: JiraConfig,
+	fetcher: Fetcher = fetch,
+	mcpConfig: AtlassianMcpConfig | null = null,
 ): Promise<JiraRetrySummary> {
         await db.prepare(`UPDATE jira_case_links SET sync_status = 'failed', last_error = 'Recovered stale Jira sync lease', updated_at = CURRENT_TIMESTAMP WHERE sync_status = 'syncing' AND updated_at < datetime('now', '-15 minutes')`).run();
         const candidates = await db.prepare(`
@@ -225,7 +230,7 @@ export async function retryPendingJiraSyncs(
         let synced = 0;
         let failed = 0;
         for (const candidate of candidates.results) {
-                const result = await syncApprovedCaseToJira(db, candidate.case_id, config, fetcher);
+		const result = await syncApprovedCaseToJira(db, candidate.case_id, config, fetcher, mcpConfig);
                 if (result.status === "synced" || result.status === "already_synced") synced += 1;
                 else if (result.status === "failed") failed += 1;
         }

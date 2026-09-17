@@ -2,13 +2,13 @@ import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const expectedMigrations = Array.from({ length: 13 }, (_, index) => String(index + 1).padStart(4, "0"));
+const expectedMigrations = Array.from({ length: 14 }, (_, index) => String(index + 1).padStart(4, "0"));
 const migrations = readdirSync(new URL("../migrations", import.meta.url))
         .filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
 const errors = [];
 
 if (migrations.length !== expectedMigrations.length) {
-        errors.push(`Expected 13 migrations, found ${migrations.length}.`);
+        errors.push(`Expected 14 migrations, found ${migrations.length}.`);
 }
 for (const [index, prefix] of expectedMigrations.entries()) {
         if (!migrations[index]?.startsWith(`${prefix}_`)) errors.push(`Migration ${prefix} is missing or out of order.`);
@@ -21,7 +21,8 @@ for (const required of ['"main": "src/index.ts"', '"binding": "DB"', '"binding":
 const forbiddenSecrets = [
         "DASHBOARD_PASSWORD", "DASHBOARD_SESSION_SECRET", "WHATSAPP_ACCESS_TOKEN",
         "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "JIRA_API_TOKEN",
-        "JIRA_WEBHOOK_SECRET", "MICROSOFT_APP_PASSWORD",
+        "JIRA_WEBHOOK_SECRET", "MICROSOFT_APP_PASSWORD", "ATLASSIAN_MCP_API_TOKEN",
+        "ATLASSIAN_MCP_SERVICE_TOKEN",
 ];
 for (const secret of forbiddenSecrets) {
         if (configText.includes(`"${secret}"`)) errors.push(`${secret} must be stored as a Wrangler secret, not in wrangler.jsonc.`);

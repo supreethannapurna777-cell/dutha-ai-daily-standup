@@ -1,5 +1,6 @@
 import type { WorkerEnv } from "./env";
 import { jiraConfigFromEnv, retryPendingJiraSyncs, type JiraRetrySummary } from "./jira-sync";
+import { atlassianMcpConfigFromEnv } from "./atlassian-mcp";
 import { deliverPendingWhatsappNotifications } from "./jira-webhook";
 import { deliverPendingTeamsNotifications } from "./teams";
 import type { Fetcher } from "./whatsapp";
@@ -90,7 +91,7 @@ export async function recoverIntegrationPipeline(env: WorkerEnv, fetcher: Fetche
         const recoveredNotifications = await recoverStuckNotifications(env.DB);
         const jiraConfig = jiraConfigFromEnv(env);
         const jira = jiraConfig
-                ? await retryPendingJiraSyncs(env.DB, jiraConfig, fetcher)
+                ? await retryPendingJiraSyncs(env.DB, jiraConfig, fetcher, atlassianMcpConfigFromEnv(env))
                 : { selected: 0, synced: 0, failed: 0, exhausted: 0 };
         const whatsappSent = await deliverPendingWhatsappNotifications(env, fetcher);
         const teamsSent = await deliverPendingTeamsNotifications(env, fetcher);

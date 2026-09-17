@@ -31,6 +31,7 @@ export function evaluateDeploymentPreflight(env: WorkerEnv): DeploymentPreflight
                 ["Jira API token", env.JIRA_API_TOKEN],
                 ["Jira project key", env.JIRA_PROJECT_KEY],
                 ["Jira webhook secret", env.JIRA_WEBHOOK_SECRET],
+                ["Atlassian MCP authentication", env.ATLASSIAN_MCP_SERVICE_TOKEN || (env.ATLASSIAN_MCP_EMAIL && env.ATLASSIAN_MCP_API_TOKEN)],
                 ["Microsoft app ID", env.MICROSOFT_APP_ID],
                 ["Microsoft app password", env.MICROSOFT_APP_PASSWORD],
         ];

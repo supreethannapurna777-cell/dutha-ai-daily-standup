@@ -20,6 +20,10 @@ export interface WorkerEnv {
 	JIRA_PROJECT_KEY?: string;
 	JIRA_ISSUE_TYPE?: string;
 	JIRA_WEBHOOK_SECRET?: string;
+	ATLASSIAN_MCP_URL?: string;
+	ATLASSIAN_MCP_EMAIL?: string;
+	ATLASSIAN_MCP_API_TOKEN?: string;
+	ATLASSIAN_MCP_SERVICE_TOKEN?: string;
 	MICROSOFT_APP_ID?: string;
 	MICROSOFT_APP_PASSWORD?: string;
 	MICROSOFT_TENANT_ID?: string;
