@@ -40,9 +40,10 @@ export function generateEnrolmentCode(): string {
         return [...bytes].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
-export async function resolveWhatsappIdentity(
+export async function resolveChannelIdentity(
         db: D1Database,
-        senderPhone: string,
+        channel: "whatsapp" | "teams",
+        externalId: string,
 ): Promise<ChannelIdentity | null> {
         const row = await db.prepare(`
                 SELECT identity.tenant_id, identity.team_member_id,
@@ -51,23 +52,33 @@ export async function resolveWhatsappIdentity(
                 INNER JOIN team_members AS member
                         ON member.id = identity.team_member_id
                         AND member.tenant_id = identity.tenant_id
-                WHERE identity.channel = 'whatsapp'
-                        AND identity.external_id = ?
+                WHERE identity.channel = ? AND identity.external_id = ?
                         AND member.active = 1
                 LIMIT 1
-        `).bind(senderPhone).first<{
+        `).bind(channel, externalId).first<{
                 tenant_id: number;
                 team_member_id: number;
                 primary_project_id: number;
                 name: string;
         }>();
-
-        if (row) return {
+        return row ? {
                 tenantId: row.tenant_id,
                 projectId: row.primary_project_id,
                 teamMemberId: row.team_member_id,
                 memberName: row.name,
-        };
+        } : null;
+}
+
+export async function resolveWhatsappIdentity(
+        db: D1Database,
+        senderPhone: string,
+): Promise<ChannelIdentity | null> {
+        const identity = await resolveChannelIdentity(
+                db,
+                "whatsapp",
+                senderPhone,
+        );
+        if (identity) return identity;
 
         const legacy = await db.prepare(`
                 SELECT id, tenant_id, primary_project_id, name

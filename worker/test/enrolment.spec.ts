@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
         hashEnrolmentCode,
         processWhatsappEnrolment,
+        resolveChannelIdentity,
         resolveWhatsappIdentity,
 } from "../src/enrolment";
 import { channelManagementResponse } from "../src/channel-management";
@@ -91,6 +92,25 @@ describe("secure channel enrolment", () => {
                         phone: "919900000001",
                         enrolment_status: "enrolled",
                         scheduling_enabled: 0,
+                });
+        });
+
+        it("resolves a Teams identity through the shared identity model", async () => {
+                await env.DB.prepare(`
+                        INSERT INTO channel_identities (
+                                tenant_id, team_member_id, channel,
+                                external_id, display_name
+                        ) VALUES (1, ?, 'teams', 'teams-user-1', 'Sreeja')
+                `).bind(memberId).run();
+                expect(await resolveChannelIdentity(
+                        env.DB,
+                        "teams",
+                        "teams-user-1",
+                )).toEqual({
+                        tenantId: 1,
+                        projectId: 1,
+                        teamMemberId: memberId,
+                        memberName: "Sreeja",
                 });
         });
 

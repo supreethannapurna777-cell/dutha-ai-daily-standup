@@ -1,6 +1,9 @@
 interface SourceUpdate {
         id: number;
         sender_phone: string;
+        team_member_id: number | null;
+        tenant_id: number;
+        project_id: number;
         blockers: string | null;
         dependencies: string | null;
         people_to_connect: string | null;
@@ -123,7 +126,10 @@ async function getSourceUpdate(
                         `
                         SELECT
                                 processed.id,
+                                incoming.team_member_id,
                                 incoming.sender_phone,
+                                processed.tenant_id,
+                                processed.project_id,
                                 processed.blockers,
                                 processed.dependencies,
                                 processed.people_to_connect
@@ -141,35 +147,69 @@ async function getSourceUpdate(
 
 async function getRequester(
         db: D1Database,
+        memberId: number | null,
         senderPhone: string,
+        tenantId: number,
+        projectId: number,
 ): Promise<CaseMember | null> {
         return db
                 .prepare(
                         `
                         SELECT id, name
                         FROM team_members
-                        WHERE phone = ?
+                        WHERE tenant_id = ?
                                 AND active = 1
+                                AND (
+                                        (? IS NOT NULL AND id = ?)
+                                        OR (? IS NULL AND phone = ?)
+                                )
+                                AND (
+                                        primary_project_id = ?
+                                        OR EXISTS (
+                                                SELECT 1 FROM team_member_projects
+                                                WHERE team_member_id = team_members.id
+                                                        AND project_id = ?
+                                        )
+                                )
                         LIMIT 1
                         `,
                 )
-                .bind(senderPhone)
+                .bind(
+                        tenantId,
+                        memberId,
+                        memberId,
+                        memberId,
+                        senderPhone,
+                        projectId,
+                        projectId,
+                )
                 .first<CaseMember>();
 }
 
 
 async function getActiveMembers(
         db: D1Database,
+        tenantId: number,
+        projectId: number,
 ): Promise<CaseMember[]> {
         const result = await db
                 .prepare(
                         `
                         SELECT id, name
                         FROM team_members
-                        WHERE active = 1
+                        WHERE tenant_id = ? AND active = 1
+                                AND (
+                                        primary_project_id = ?
+                                        OR EXISTS (
+                                                SELECT 1 FROM team_member_projects
+                                                WHERE team_member_id = team_members.id
+                                                        AND project_id = ?
+                                        )
+                                )
                         ORDER BY name
                         `,
                 )
+                .bind(tenantId, projectId, projectId)
                 .all<CaseMember>();
 
         return result.results;
@@ -191,7 +231,10 @@ export async function createCoordinationCase(
 
         const requester = await getRequester(
                 db,
+                source.team_member_id,
                 source.sender_phone,
+                source.tenant_id,
+                source.project_id,
         );
 
         if (!requester) {
@@ -237,7 +280,11 @@ export async function createCoordinationCase(
                                         source.people_to_connect,
                                 );
 
-        const members = await getActiveMembers(db);
+        const members = await getActiveMembers(
+                db,
+                source.tenant_id,
+                source.project_id,
+        );
 
         const responsible =
                 matchResponsibleMember(
@@ -261,9 +308,11 @@ export async function createCoordinationCase(
                                 case_type,
                                 issue_summary,
                                 status,
-                                priority
+                                priority,
+                                tenant_id,
+                                project_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                         RETURNING id
                         `,
                 )
@@ -275,6 +324,8 @@ export async function createCoordinationCase(
                         summary,
                         status,
                         determinePriority(summary),
+                        source.tenant_id,
+                        source.project_id,
                 )
                 .first<{ id: number }>();
 
