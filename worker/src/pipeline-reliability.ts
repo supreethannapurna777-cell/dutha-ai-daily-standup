@@ -15,7 +15,7 @@ export interface PipelineRecoverySummary {
 
 export interface IntegrationReadiness {
         whatsapp: { configured: boolean; pending: number; failed: number };
-        teams: { configured: boolean; pending: number; failed: number };
+        teams: { enabled: boolean; configured: boolean; pending: number; failed: number };
         jira: { configured: boolean; webhookConfigured: boolean; pending: number; failed: number };
 }
 
@@ -29,6 +29,7 @@ async function notificationCounts(db: D1Database, channel: "whatsapp" | "teams")
 }
 
 export async function integrationReadiness(env: WorkerEnv): Promise<IntegrationReadiness> {
+        const teamsEnabled = env.TEAMS_RELEASE_ENABLED?.trim().toLowerCase() === "true";
         const [whatsapp, teams, jira] = await Promise.all([
                 notificationCounts(env.DB, "whatsapp"),
                 notificationCounts(env.DB, "teams"),
@@ -43,7 +44,8 @@ export async function integrationReadiness(env: WorkerEnv): Promise<IntegrationR
                         pending: whatsapp?.pending ?? 0, failed: whatsapp?.failed ?? 0,
                 },
                 teams: {
-                        configured: Boolean(env.MICROSOFT_APP_ID && env.MICROSOFT_APP_PASSWORD),
+                        enabled: teamsEnabled,
+                        configured: teamsEnabled && Boolean(env.MICROSOFT_APP_ID && env.MICROSOFT_APP_PASSWORD && env.MICROSOFT_TENANT_ID),
                         pending: teams?.pending ?? 0, failed: teams?.failed ?? 0,
                 },
                 jira: {
@@ -94,7 +96,9 @@ export async function recoverIntegrationPipeline(env: WorkerEnv, fetcher: Fetche
                 ? await retryPendingJiraSyncs(env.DB, jiraConfig, fetcher, atlassianMcpConfigFromEnv(env))
                 : { selected: 0, synced: 0, failed: 0, exhausted: 0 };
         const whatsappSent = await deliverPendingWhatsappNotifications(env, fetcher);
-        const teamsSent = await deliverPendingTeamsNotifications(env, fetcher);
+        const teamsSent = env.TEAMS_RELEASE_ENABLED?.trim().toLowerCase() === "true"
+                ? await deliverPendingTeamsNotifications(env, fetcher)
+                : 0;
         const exhausted = await recordExhaustedNotifications(env.DB);
         return { jira, recoveredNotifications, whatsappSent, teamsSent, exhausted };
 }

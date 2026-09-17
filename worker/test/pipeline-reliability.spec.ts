@@ -7,6 +7,7 @@ const fullEnv = {
         ...env,
         WHATSAPP_ACCESS_TOKEN: "wa-token", WHATSAPP_PHONE_NUMBER_ID: "phone-id", WHATSAPP_APP_SECRET: "wa-secret", WHATSAPP_API_VERSION: "v26.0",
         MICROSOFT_APP_ID: "teams-app", MICROSOFT_APP_PASSWORD: "teams-secret", MICROSOFT_TENANT_ID: "tenant",
+        TEAMS_RELEASE_ENABLED: "true",
         JIRA_BASE_URL: "https://example.atlassian.net", JIRA_EMAIL: "jira@example.com", JIRA_API_TOKEN: "jira-token", JIRA_PROJECT_KEY: "DUTHA", JIRA_WEBHOOK_SECRET: "webhook-secret",
 } as WorkerEnv;
 
@@ -29,9 +30,14 @@ describe("integration pipeline reliability", () => {
         it("reports configuration readiness without exposing credentials", async () => {
                 expect(await integrationReadiness(fullEnv)).toEqual({
                         whatsapp: { configured: true, pending: 0, failed: 0 },
-                        teams: { configured: true, pending: 0, failed: 0 },
+                        teams: { enabled: true, configured: true, pending: 0, failed: 0 },
                         jira: { configured: true, webhookConfigured: true, pending: 0, failed: 0 },
                 });
+        });
+
+        it("marks Teams as planned when it is outside the current release", async () => {
+                const readiness = await integrationReadiness({ ...fullEnv, TEAMS_RELEASE_ENABLED: "false" } as WorkerEnv);
+                expect(readiness.teams).toEqual({ enabled: false, configured: false, pending: 0, failed: 0 });
         });
 
         it("recovers a stale notification lease and delivers it", async () => {

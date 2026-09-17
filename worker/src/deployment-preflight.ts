@@ -16,6 +16,7 @@ function present(value: unknown): boolean {
 }
 
 export function evaluateDeploymentPreflight(env: WorkerEnv): DeploymentPreflight {
+        const teamsEnabled = env.TEAMS_RELEASE_ENABLED?.trim().toLowerCase() === "true";
         const requirements: Array<[string, unknown]> = [
                 ["DB binding", env.DB],
                 ["AI binding", env.AI],
@@ -32,9 +33,14 @@ export function evaluateDeploymentPreflight(env: WorkerEnv): DeploymentPreflight
                 ["Jira project key", env.JIRA_PROJECT_KEY],
                 ["Jira webhook secret", env.JIRA_WEBHOOK_SECRET],
                 ["Atlassian MCP authentication", env.ATLASSIAN_MCP_SERVICE_TOKEN || (env.ATLASSIAN_MCP_EMAIL && env.ATLASSIAN_MCP_API_TOKEN)],
-                ["Microsoft app ID", env.MICROSOFT_APP_ID],
-                ["Microsoft app password", env.MICROSOFT_APP_PASSWORD],
         ];
+        if (teamsEnabled) {
+                requirements.push(
+                        ["Microsoft app ID", env.MICROSOFT_APP_ID],
+                        ["Microsoft app password", env.MICROSOFT_APP_PASSWORD],
+                        ["Microsoft tenant ID", env.MICROSOFT_TENANT_ID],
+                );
+        }
         const checks = requirements.map(([name, value]) => ({ name, ready: present(value) }));
         const session = checks.find((check) => check.name === "Dashboard session secret");
         if (session && (env.DASHBOARD_SESSION_SECRET?.length ?? 0) < 32) session.ready = false;

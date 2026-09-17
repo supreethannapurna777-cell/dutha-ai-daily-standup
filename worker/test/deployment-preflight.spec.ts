@@ -13,6 +13,7 @@ const readyEnv = {
         JIRA_API_TOKEN: "jira-token", JIRA_PROJECT_KEY: "DUTHA", JIRA_WEBHOOK_SECRET: "webhook",
         ATLASSIAN_MCP_EMAIL: "mcp@example.com", ATLASSIAN_MCP_API_TOKEN: "mcp-token",
         MICROSOFT_APP_ID: "app-id", MICROSOFT_APP_PASSWORD: "app-password",
+        MICROSOFT_TENANT_ID: "tenant-id", TEAMS_RELEASE_ENABLED: "false",
 } as WorkerEnv;
 
 describe("deployment preflight", () => {
@@ -22,6 +23,23 @@ describe("deployment preflight", () => {
                 expect(report.missing).toEqual([]);
                 const response = deploymentPreflightResponse(readyEnv);
                 expect(response.status).toBe(200);
+        });
+
+        it("requires Teams credentials only when Teams is enabled for release", async () => {
+                const enabled = {
+                        ...readyEnv,
+                        TEAMS_RELEASE_ENABLED: "true",
+                        MICROSOFT_APP_ID: undefined,
+                        MICROSOFT_APP_PASSWORD: undefined,
+                        MICROSOFT_TENANT_ID: undefined,
+                } as WorkerEnv;
+                const report = evaluateDeploymentPreflight(enabled);
+                expect(report.ready).toBe(false);
+                expect(report.missing).toEqual([
+                        "Microsoft app ID",
+                        "Microsoft app password",
+                        "Microsoft tenant ID",
+                ]);
         });
 
         it("returns NOT READY without exposing secret values", async () => {
