@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS channel_identity_events (
                         'invite_created',
                         'identity_connected',
                         'identity_rejected',
-                        'invite_revoked'
+                        'invite_revoked',
+                        'members_imported'
                 )
         ),
         external_message_id TEXT UNIQUE,

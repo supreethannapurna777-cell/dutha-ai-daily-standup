@@ -17,13 +17,15 @@ const managementEnv = {
         WHATSAPP_PHONE_NUMBER_ID: "configured",
 } as WorkerEnv;
 
-function managementRequest(method = "GET", body?: URLSearchParams): Request {
+function managementRequest(method = "GET", body?: URLSearchParams | FormData): Request {
         return new Request("https://example.com/dashboard/channels?project=1", {
                 method,
                 headers: {
                         Authorization: `Basic ${btoa("admin:test-password")}`,
                         ...(method === "POST" ? {
                                 Origin: "https://example.com",
+                        } : {}),
+                        ...(body instanceof URLSearchParams ? {
                                 "Content-Type": "application/x-www-form-urlencoded",
                         } : {}),
                 },
@@ -142,5 +144,127 @@ describe("secure channel enrolment", () => {
                 expect(html).toMatch(/JOIN [A-Z2-9]{10} work-email@company\.com/);
                 expect(await env.DB.prepare("SELECT COUNT(*) AS count FROM enrolment_invites").first())
                         .toEqual({ count: 1 });
+        });
+
+        it("imports validated employees from CSV without phone numbers", async () => {
+                const form = new FormData();
+                form.set("action", "import_members");
+                form.set("project_id", "1");
+                form.set("members_csv", new File([
+                        "name,email,department,timezone\n"
+                        + "Anita,anita@example.com,Finance,Asia/Kolkata\n"
+                        + '"John, Peter",john@example.com,Operations,Europe/London\n',
+                ], "members.csv", { type: "text/csv" }));
+
+                const response = await channelManagementResponse(
+                        managementRequest("POST", form),
+                        managementEnv,
+                );
+                const html = await response.text();
+                expect(response.status).toBe(200);
+                expect(html).toContain("2 employees imported");
+                const imported = (await env.DB.prepare(`
+                        SELECT name, email, department, timezone, enrolment_status,
+                                scheduling_enabled
+                        FROM team_members WHERE email IN (?, ?) ORDER BY email
+                `).bind("anita@example.com", "john@example.com").all()).results;
+                expect(imported).toEqual([
+                        {
+                                name: "Anita",
+                                email: "anita@example.com",
+                                department: "Finance",
+                                timezone: "Asia/Kolkata",
+                                enrolment_status: "invited",
+                                scheduling_enabled: 0,
+                        },
+                        {
+                                name: "John, Peter",
+                                email: "john@example.com",
+                                department: "Operations",
+                                timezone: "Europe/London",
+                                enrolment_status: "invited",
+                                scheduling_enabled: 0,
+                        },
+                ]);
+        });
+
+        it("rejects the whole CSV before import when an email is duplicated", async () => {
+                const form = new FormData();
+                form.set("action", "import_members");
+                form.set("project_id", "1");
+                form.set("members_csv", new File([
+                        "name,email,department,timezone\n"
+                        + "Anita,anita@example.com,Finance,Asia/Kolkata\n"
+                        + "Again,anita@example.com,Finance,Asia/Kolkata\n",
+                ], "members.csv", { type: "text/csv" }));
+                const response = await channelManagementResponse(
+                        managementRequest("POST", form),
+                        managementEnv,
+                );
+                expect(response.status).toBe(400);
+                expect(await response.text()).toContain("repeats anita@example.com");
+                expect(await env.DB.prepare(`
+                        SELECT COUNT(*) AS count FROM team_members
+                        WHERE email = 'anita@example.com'
+                `).first()).toEqual({ count: 0 });
+        });
+
+        it("does not import employees into another tenant's project", async () => {
+                const tenant = await env.DB.prepare(`
+                        INSERT INTO tenants (slug, name) VALUES (?, ?) RETURNING id
+                `).bind(`other-${crypto.randomUUID()}`, "Other company").first<{ id: number }>();
+                const project = await env.DB.prepare(`
+                        INSERT INTO projects (tenant_id, project_key, name)
+                        VALUES (?, ?, ?) RETURNING id
+                `).bind(tenant!.id, "PRIVATE", "Private project").first<{ id: number }>();
+                const form = new FormData();
+                form.set("action", "import_members");
+                form.set("project_id", String(project!.id));
+                form.set("members_csv", new File([
+                        "name,email,department,timezone\n"
+                        + "Outsider,outsider@example.com,Finance,Asia/Kolkata\n",
+                ], "members.csv", { type: "text/csv" }));
+                const response = await channelManagementResponse(
+                        managementRequest("POST", form),
+                        managementEnv,
+                );
+                expect(response.status).toBe(403);
+                expect(await response.text()).toBe("Project access denied.");
+                expect(await env.DB.prepare(`
+                        SELECT COUNT(*) AS count FROM team_members
+                        WHERE email = 'outsider@example.com'
+                `).first()).toEqual({ count: 0 });
+        });
+
+        it("replaces an active invitation and closes its old code", async () => {
+                const hash = await hashEnrolmentCode("ABCDEFGH23");
+                const invite = await env.DB.prepare(`
+                        INSERT INTO enrolment_invites (
+                                tenant_id, project_id, created_by_management_user_id,
+                                code_hash, expires_at, max_uses
+                        ) VALUES (1, 1, 1, ?, ?, 12) RETURNING id
+                `).bind(hash, "2026-09-20T00:00:00.000Z").first<{ id: number }>();
+                const response = await channelManagementResponse(
+                        managementRequest("POST", new URLSearchParams({
+                                action: "replace_invite",
+                                project_id: "1",
+                                invite_id: String(invite!.id),
+                        })),
+                        managementEnv,
+                        new Date("2026-09-17T00:00:00.000Z"),
+                );
+                const html = await response.text();
+                expect(response.status).toBe(200);
+                expect(html).toContain("Invitation replaced");
+                expect(html).toMatch(/JOIN [A-Z2-9]{10} work-email@company\.com/);
+                expect(await env.DB.prepare(`
+                        SELECT COUNT(*) AS count FROM enrolment_invites
+                        WHERE project_id = 1 AND revoked_at IS NULL AND max_uses = 12
+                `).first()).toEqual({ count: 1 });
+                expect(await env.DB.prepare(`
+                        SELECT revoked_at FROM enrolment_invites WHERE id = ?
+                `).bind(invite!.id).first<{ revoked_at: string | null }>()).toEqual({
+                        revoked_at: "2026-09-17T00:00:00.000Z",
+                });
         });
 });
