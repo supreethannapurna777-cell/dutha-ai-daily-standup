@@ -122,6 +122,7 @@ describe("Jira outbound case sync", () => {
         it("records a failure and safely retries", async () => {
                 const fetcher = vi.fn()
                         .mockResolvedValueOnce(new Response("temporary failure", { status: 503 }))
+                        .mockResolvedValueOnce(Response.json({ issues: [] }))
                         .mockResolvedValueOnce(Response.json({
                                 id: "10002",
                                 key: "DUTHA-43",
@@ -138,7 +139,7 @@ describe("Jira outbound case sync", () => {
                         config,
                         fetcher,
                 )).status).toBe("synced");
-                expect(fetcher).toHaveBeenCalledTimes(2);
+                expect(fetcher).toHaveBeenCalledTimes(3);
                 expect(await env.DB.prepare(`
                         SELECT sync_status, attempt_count, last_error
                         FROM jira_case_links WHERE case_id = ?

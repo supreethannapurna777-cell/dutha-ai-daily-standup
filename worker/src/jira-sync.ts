@@ -15,6 +15,13 @@ export interface JiraSyncResult {
         error?: string;
 }
 
+export interface JiraRetrySummary {
+        selected: number;
+        synced: number;
+        failed: number;
+        exhausted: number;
+}
+
 interface JiraCase {
         id: number;
         tenant_id: number;
@@ -60,6 +67,26 @@ function jiraDescription(item: JiraCase): object {
         };
 }
 
+function jiraCaseLabel(item: Pick<JiraCase, "tenant_id" | "id">): string {
+        return `dutha-t${item.tenant_id}-c${item.id}`;
+}
+
+async function findExistingIssue(
+        config: JiraConfig,
+        item: JiraCase,
+        fetcher: Fetcher,
+): Promise<{ id: string; key: string } | null> {
+        const jql = `project = "${config.projectKey.replaceAll('"', '\\"')}" AND labels = "${jiraCaseLabel(item)}"`;
+        const response = await fetcher(
+                `${config.baseUrl}/rest/api/3/search/jql?jql=${encodeURIComponent(jql)}&maxResults=1&fields=key`,
+                { headers: { Authorization: `Basic ${btoa(`${config.email}:${config.apiToken}`)}`, Accept: "application/json" } },
+        );
+        if (!response.ok) return null;
+        const body = await response.json<{ issues?: Array<{ id?: string; key?: string }> }>();
+        const issue = body.issues?.[0];
+        return issue?.id && issue.key ? { id: issue.id, key: issue.key } : null;
+}
+
 async function markFailed(
         db: D1Database,
         caseId: number,
@@ -101,11 +128,12 @@ export async function syncApprovedCaseToJira(
                 ) VALUES (?, ?, ?)
         `).bind(item.tenant_id, item.project_id, item.id).run();
         const link = await db.prepare(`
-                SELECT sync_status, external_issue_key FROM jira_case_links
+                SELECT sync_status, external_issue_key, attempt_count FROM jira_case_links
                 WHERE case_id = ?
         `).bind(caseId).first<{
                 sync_status: string;
                 external_issue_key: string | null;
+                attempt_count: number;
         }>();
         if (link?.sync_status === "synced") {
                 return {
@@ -114,6 +142,16 @@ export async function syncApprovedCaseToJira(
                 };
         }
         if (link?.sync_status === "syncing") return { status: "not_ready" };
+
+        if ((link?.attempt_count ?? 0) > 0) {
+                const existing = await findExistingIssue(config, item, fetcher);
+                if (existing) {
+                        const issueUrl = `${config.baseUrl}/browse/${encodeURIComponent(existing.key)}`;
+                        await db.prepare(`UPDATE jira_case_links SET sync_status = 'synced', external_issue_id = ?, external_issue_key = ?, external_issue_url = ?, last_error = NULL, synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE case_id = ?`)
+                                .bind(existing.id, existing.key, issueUrl, caseId).run();
+                        return { status: "synced", issueKey: existing.key };
+                }
+        }
 
         await db.prepare(`
                 UPDATE jira_case_links
@@ -138,6 +176,7 @@ export async function syncApprovedCaseToJira(
                                         issuetype: { name: config.issueType },
                                         summary: `[Dutha] ${item.issue_summary}`.slice(0, 255),
                                         description: jiraDescription(item),
+                                        labels: [jiraCaseLabel(item)],
                                 },
                         }),
                 });
@@ -169,4 +208,34 @@ export async function syncApprovedCaseToJira(
                 WHERE case_id = ?
         `).bind(created.id, created.key, issueUrl, caseId).run();
         return { status: "synced", issueKey: created.key };
+}
+
+export async function retryPendingJiraSyncs(
+        db: D1Database,
+        config: JiraConfig,
+        fetcher: Fetcher = fetch,
+): Promise<JiraRetrySummary> {
+        await db.prepare(`UPDATE jira_case_links SET sync_status = 'failed', last_error = 'Recovered stale Jira sync lease', updated_at = CURRENT_TIMESTAMP WHERE sync_status = 'syncing' AND updated_at < datetime('now', '-15 minutes')`).run();
+        const candidates = await db.prepare(`
+                SELECT case_id FROM jira_case_links
+                WHERE sync_status IN ('pending', 'failed') AND attempt_count < 5
+                        AND (last_attempted_at IS NULL OR last_attempted_at < datetime('now', '-5 minutes'))
+                ORDER BY updated_at LIMIT 20
+        `).all<{ case_id: number }>();
+        let synced = 0;
+        let failed = 0;
+        for (const candidate of candidates.results) {
+                const result = await syncApprovedCaseToJira(db, candidate.case_id, config, fetcher);
+                if (result.status === "synced" || result.status === "already_synced") synced += 1;
+                else if (result.status === "failed") failed += 1;
+        }
+        const exhausted = await db.prepare(`SELECT COUNT(*) AS count FROM jira_case_links WHERE sync_status = 'failed' AND attempt_count >= 5`).first<{ count: number }>();
+        await db.prepare(`
+                INSERT OR IGNORE INTO integration_operation_events (
+                        tenant_id, project_id, integration, event_type, event_key, details
+                ) SELECT tenant_id, project_id, 'jira', 'retry_exhausted',
+                        'jira-exhausted:' || id, substr(COALESCE(last_error, 'Jira sync failed'), 1, 500)
+                FROM jira_case_links WHERE sync_status = 'failed' AND attempt_count >= 5
+        `).run();
+        return { selected: candidates.results.length, synced, failed, exhausted: exhausted?.count ?? 0 };
 }

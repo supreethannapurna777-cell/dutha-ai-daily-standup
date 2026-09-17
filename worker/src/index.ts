@@ -48,7 +48,8 @@ import {
         jiraWebhookAuthorised,
         processJiraWebhook,
 } from "./jira-webhook";
-import { deliverPendingTeamsNotifications, teamsWebhookResponse } from "./teams";
+import { teamsWebhookResponse } from "./teams";
+import { recoverIntegrationPipeline } from "./pipeline-reliability";
 
 export type { WorkerEnv } from "./env";
 
@@ -384,8 +385,7 @@ export default {
                                         env,
                                 ),
                                 retryFailedVoiceUpdates(env),
-                                deliverPendingWhatsappNotifications(env),
-                                deliverPendingTeamsNotifications(env),
+                                recoverIntegrationPipeline(env),
                         ]).then(() => undefined),
                 );
         },
