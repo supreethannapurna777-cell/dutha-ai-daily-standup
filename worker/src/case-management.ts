@@ -1,6 +1,7 @@
 import type { WorkerEnv } from './env';
 import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
 import { sendTextMessage, type Fetcher } from './whatsapp';
+import { jiraConfigFromEnv, syncApprovedCaseToJira } from './jira-sync';
 
 interface CaseRow {
 	id: number;
@@ -1136,6 +1137,30 @@ async function processDecision(
 			.run();
 
 		await recordManagerEvent(env.DB, caseId, 'case_approved', `Approved and assigned to ${responsible.name}`);
+
+		const jiraConfig = jiraConfigFromEnv(env);
+		if (jiraConfig) {
+			try {
+				const jiraResult = await syncApprovedCaseToJira(
+					env.DB,
+					caseId,
+					jiraConfig,
+					fetcher,
+				);
+				console.log(JSON.stringify({
+					event: 'jira_case_sync_completed',
+					caseId,
+					status: jiraResult.status,
+					issueKey: jiraResult.issueKey,
+				}));
+			} catch (error) {
+				console.error(JSON.stringify({
+					event: 'jira_case_sync_failed',
+					caseId,
+					error: error instanceof Error ? error.message : 'Unknown Jira sync error',
+				}));
+			}
+		}
 
 		return {
 			error: null,

@@ -68,6 +68,9 @@ describe("manager coordination case controls", () => {
         beforeEach(async () => {
                 await env.DB.batch([
                         env.DB.prepare(
+                                "DELETE FROM jira_case_links",
+                        ),
+                        env.DB.prepare(
                                 "DELETE FROM case_events",
                         ),
                         env.DB.prepare(
@@ -348,6 +351,40 @@ describe("manager coordination case controls", () => {
                 expect(pageHtml).toContain(
                         "Manage availability",
                 );
+        });
+
+        it("creates a Jira issue when an approved case has Jira configured", async () => {
+                const body = new URLSearchParams({
+                        case_id: String(caseId),
+                        action: "approve",
+                        responsible_member_id: String(responsibleId),
+                        meeting_duration_minutes: "20",
+                        manager_notes: "Create the external work item.",
+                });
+                const fetcher = vi.fn().mockResolvedValue(Response.json({
+                        id: "10050",
+                        key: "DUTHA-50",
+                }, { status: 201 }));
+                const response = await caseManagementResponse(
+                        request("POST", body),
+                        {
+                                ...caseEnv,
+                                JIRA_BASE_URL: "https://example.atlassian.net",
+                                JIRA_EMAIL: "integration@example.com",
+                                JIRA_API_TOKEN: "test-token",
+                                JIRA_PROJECT_KEY: "DUTHA",
+                        },
+                        fetcher,
+                );
+                expect(response.status).toBe(303);
+                expect(fetcher).toHaveBeenCalledOnce();
+                expect(await env.DB.prepare(`
+                        SELECT sync_status, external_issue_key
+                        FROM jira_case_links WHERE case_id = ?
+                `).bind(caseId).first()).toEqual({
+                        sync_status: "synced",
+                        external_issue_key: "DUTHA-50",
+                });
         });
 
         it("allows the manager to reject a case", async () => {

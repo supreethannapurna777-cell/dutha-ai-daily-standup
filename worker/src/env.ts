@@ -14,4 +14,9 @@ export interface WorkerEnv {
     DASHBOARD_SESSION_SECRET?: string;
     WHATSAPP_APP_SECRET: string;
 	AI?: Ai;
+	JIRA_BASE_URL?: string;
+	JIRA_EMAIL?: string;
+	JIRA_API_TOKEN?: string;
+	JIRA_PROJECT_KEY?: string;
+	JIRA_ISSUE_TYPE?: string;
 }
