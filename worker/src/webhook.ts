@@ -14,6 +14,7 @@ import {
         createCaseForProcessedUpdate,
         processInboundTextMessage,
 } from "./workflow";
+import { processResolutionReply } from "./resolution-reply";
 
 
 export interface WebhookResult {
@@ -457,7 +458,14 @@ export async function processWebhookPayload(
                                                 text,
                                                 identity,
                                         },
-                                        async () => {
+                                        async (workflowMessage) => {
+                                                const resolutionReply = await processResolutionReply(db, workflowMessage);
+                                                if (resolutionReply.handled) {
+                                                        if (resolutionReply.response && availabilityReplySender) {
+                                                                await availabilityReplySender(senderPhone, resolutionReply.response);
+                                                        }
+                                                        return resolutionReply;
+                                                }
                                                 const availabilityReply =
                                                         await processAvailabilityReply(
                                                                 db,

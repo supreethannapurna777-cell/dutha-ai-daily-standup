@@ -19,4 +19,5 @@ export interface WorkerEnv {
 	JIRA_API_TOKEN?: string;
 	JIRA_PROJECT_KEY?: string;
 	JIRA_ISSUE_TYPE?: string;
+	JIRA_WEBHOOK_SECRET?: string;
 }

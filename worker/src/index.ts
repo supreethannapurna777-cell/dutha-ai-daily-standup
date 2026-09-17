@@ -43,6 +43,11 @@ import {
 } from "./auth";
 import { projectManagementResponse } from "./project-management";
 import { channelManagementResponse } from "./channel-management";
+import {
+        deliverPendingWhatsappNotifications,
+        jiraWebhookAuthorised,
+        processJiraWebhook,
+} from "./jira-webhook";
 
 export type { WorkerEnv } from "./env";
 
@@ -239,6 +244,25 @@ export default {
                         );
                 }
 
+                if (request.method === "POST" && url.pathname === "/webhooks/jira") {
+                        if (!jiraWebhookAuthorised(request, env)) {
+                                return jsonResponse({ error: "Invalid Jira webhook credentials" }, 401);
+                        }
+                        let payload: unknown;
+                        try {
+                                payload = await request.json();
+                        } catch {
+                                return jsonResponse({ error: "Invalid JSON payload" }, 400);
+                        }
+                        const result = await processJiraWebhook(
+                                env.DB,
+                                payload as Parameters<typeof processJiraWebhook>[1],
+                                request,
+                        );
+                        context.waitUntil(deliverPendingWhatsappNotifications(env).then(() => undefined));
+                        return jsonResponse(result);
+                }
+
                 if (
                         request.method === "GET"
                         && url.pathname === "/privacy"
@@ -355,6 +379,7 @@ export default {
                                         env,
                                 ),
                                 retryFailedVoiceUpdates(env),
+                                deliverPendingWhatsappNotifications(env),
                         ]).then(() => undefined),
                 );
         },
