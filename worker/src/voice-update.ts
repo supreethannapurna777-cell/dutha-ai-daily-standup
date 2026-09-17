@@ -16,6 +16,8 @@ export interface IncomingVoiceMessage {
         receivedAt: string;
         mediaId: string;
         mimeType?: string;
+        tenantId?: number;
+        projectId?: number;
 }
 
 
@@ -29,6 +31,8 @@ interface VoiceUpdateRow extends ExtractedUpdate {
         mime_type: string | null;
         original_transcript: string | null;
         reporting_transcript: string | null;
+        tenant_id: number;
+        project_id: number;
 }
 
 
@@ -109,8 +113,9 @@ export async function acceptVoiceUpdate(
         const inserted = await db.prepare(`
                 INSERT OR IGNORE INTO voice_updates (
                         whatsapp_message_id, sender_name, sender_phone,
-                        received_at, media_id, mime_type, status
-                ) VALUES (?, ?, ?, ?, ?, ?, 'received')
+                        received_at, media_id, mime_type, status,
+                        tenant_id, project_id
+                ) VALUES (?, ?, ?, ?, ?, ?, 'received', ?, ?)
                 RETURNING id
         `).bind(
                 message.whatsappMessageId,
@@ -119,6 +124,8 @@ export async function acceptVoiceUpdate(
                 message.receivedAt,
                 message.mediaId,
                 message.mimeType ?? null,
+                message.tenantId ?? 1,
+                message.projectId ?? 1,
         ).first<{ id: number }>();
 
         if (!inserted) {
@@ -263,8 +270,9 @@ async function confirmVoiceUpdate(
         await db.prepare(`
                 INSERT OR IGNORE INTO incoming_messages (
                         whatsapp_message_id, received_at, sender_name,
-                        sender_phone, original_reply, processing_status
-                ) VALUES (?, ?, ?, ?, ?, 'received')
+                        sender_phone, original_reply, processing_status,
+                        tenant_id, project_id
+                ) VALUES (?, ?, ?, ?, ?, 'received', ?, ?)
         `).bind(
                 voice.whatsapp_message_id,
                 voice.received_at,
@@ -273,6 +281,8 @@ async function confirmVoiceUpdate(
                 voice.reporting_transcript
                         ?? voice.original_transcript
                         ?? "",
+                voice.tenant_id,
+                voice.project_id,
         ).run();
 
         const storedIncoming = await db.prepare(`
@@ -290,8 +300,8 @@ async function confirmVoiceUpdate(
                                 message_id, sender_name, tasks,
                                 people_to_connect, blockers, dependencies,
                                 expected_completion, original_reply,
-                                processing_status
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processed')
+                                processing_status, tenant_id, project_id
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processed', ?, ?)
                 `).bind(
                         storedIncoming.id,
                         voice.sender_name,
@@ -303,6 +313,8 @@ async function confirmVoiceUpdate(
                         voice.reporting_transcript
                                 ?? voice.original_transcript
                                 ?? "",
+                        voice.tenant_id,
+                        voice.project_id,
                 ),
                 db.prepare(`
                         UPDATE incoming_messages

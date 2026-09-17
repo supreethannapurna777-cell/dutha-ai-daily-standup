@@ -42,6 +42,7 @@ import {
         logoutResponse,
 } from "./auth";
 import { projectManagementResponse } from "./project-management";
+import { channelManagementResponse } from "./channel-management";
 
 export type { WorkerEnv } from "./env";
 
@@ -329,6 +330,10 @@ export default {
 
                 if (url.pathname === "/dashboard/projects") {
                         return projectManagementResponse(managementRequest, env);
+                }
+
+                if (url.pathname === "/dashboard/channels") {
+                        return channelManagementResponse(managementRequest, env);
                 }
 
                 return jsonResponse(

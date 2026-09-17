@@ -13,6 +13,10 @@ import {
         type IncomingVoiceMessage,
         type VoiceStructuredExtractor,
 } from "./voice-update";
+import {
+        processWhatsappEnrolment,
+        resolveWhatsappIdentity,
+} from "./enrolment";
 
 
 interface StoredMessage {
@@ -21,6 +25,8 @@ interface StoredMessage {
         senderPhone: string;
         receivedAt: string;
         originalReply: string;
+        tenantId: number;
+        projectId: number;
         extracted: ExtractedUpdate;
 }
 
@@ -72,6 +78,8 @@ async function storeMessage(
         senderPhone: string,
         receivedAt: string,
         originalReply: string,
+        tenantId: number,
+        projectId: number,
 ): Promise<StoredMessage | null> {
         const inserted = await db
                 .prepare(
@@ -82,9 +90,11 @@ async function storeMessage(
                                 sender_name,
                                 sender_phone,
                                 original_reply,
-                                processing_status
+                                processing_status,
+                                tenant_id,
+                                project_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         RETURNING id
                         `,
                 )
@@ -95,6 +105,8 @@ async function storeMessage(
                         senderPhone,
                         originalReply,
                         "received",
+                        tenantId,
+                        projectId,
                 )
                 .first<{ id: number }>();
 
@@ -108,6 +120,8 @@ async function storeMessage(
                 senderPhone,
                 receivedAt,
                 originalReply,
+                tenantId,
+                projectId,
                 extracted:
                         extractUpdate(originalReply),
         };
@@ -132,10 +146,12 @@ async function saveProcessedUpdate(
                                         blockers,
                                         dependencies,
                                         expected_completion,
-                                        original_reply,
-                                        processing_status
-                                )
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                original_reply,
+                                processing_status,
+                                tenant_id,
+                                project_id
+                        )
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 `,
                         )
                         .bind(
@@ -148,6 +164,8 @@ async function saveProcessedUpdate(
                                 update.expected_completion,
                                 update.original_reply,
                                 "processed",
+                                message.tenantId,
+                                message.projectId,
                         ),
                 db
                         .prepare(
@@ -504,13 +522,30 @@ export async function processWebhookPayload(
                                                 continue;
                                         }
 
+                                        const identity = await resolveWhatsappIdentity(
+                                                db,
+                                                senderPhone,
+                                        );
+                                        if (!identity) {
+                                                if (availabilityReplySender) {
+                                                        await availabilityReplySender(
+                                                                senderPhone,
+                                                                "This WhatsApp number is not connected to Dutha. Ask your manager for an invitation.",
+                                                        );
+                                                }
+                                                result.ignored += 1;
+                                                continue;
+                                        }
+
                                         const accepted = await voiceMessageReceiver({
                                                 whatsappMessageId: messageId,
-                                                senderName: contactName,
+                                                senderName: identity.memberName,
                                                 senderPhone,
                                                 receivedAt,
                                                 mediaId,
                                                 mimeType,
+                                                tenantId: identity.tenantId,
+                                                projectId: identity.projectId,
                                         });
 
                                         if (accepted) {
@@ -553,6 +588,44 @@ export async function processWebhookPayload(
                                         continue;
                                 }
 
+                                const enrolment = await processWhatsappEnrolment(
+                                        db,
+                                        senderPhone,
+                                        contactName,
+                                        messageId,
+                                        text,
+                                        now,
+                                );
+                                if (enrolment.handled) {
+                                        if (enrolment.duplicate) {
+                                                result.duplicates += 1;
+                                                continue;
+                                        }
+                                        if (availabilityReplySender && enrolment.message) {
+                                                await availabilityReplySender(
+                                                        senderPhone,
+                                                        enrolment.message,
+                                                );
+                                        }
+                                        result.received += 1;
+                                        continue;
+                                }
+
+                                const identity = await resolveWhatsappIdentity(
+                                        db,
+                                        senderPhone,
+                                );
+                                if (!identity) {
+                                        if (availabilityReplySender) {
+                                                await availabilityReplySender(
+                                                        senderPhone,
+                                                        "This WhatsApp number is not connected to Dutha. Ask your manager for an invitation.",
+                                                );
+                                        }
+                                        result.ignored += 1;
+                                        continue;
+                                }
+
                                 const voiceReply = await processVoiceReply(
                                         db,
                                         senderPhone,
@@ -586,10 +659,12 @@ export async function processWebhookPayload(
                                         await storeMessage(
                                                 db,
                                                 messageId,
-                                                contactName,
+                                                identity.memberName,
                                                 senderPhone,
                                                 receivedAt,
                                                 text,
+                                                identity.tenantId,
+                                                identity.projectId,
                                         );
 
                                 if (!stored) {

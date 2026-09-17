@@ -495,8 +495,8 @@ function page(members: ManagedMember[], message: string | null, error: string | 
 
                         <h2>Add team member</h2>
                         <p>
-                                Phone numbers are stored privately and
-                                are never displayed after submission.
+                                Add a work email now. The employee can connect
+                                their own WhatsApp number using an invitation.
                         </p>
 
                         <div class="form-grid">
@@ -519,14 +519,23 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                                 </label>
 
                                 <label>
-                                        WhatsApp number
+                                        Work email
+                                        <input
+                                                name="email"
+                                                type="email"
+                                                maxlength="254"
+                                                placeholder="name@company.com"
+                                        >
+                                </label>
+
+                                <label>
+                                        WhatsApp number (optional)
                                         <input
                                                 name="phone"
                                                 inputmode="numeric"
                                                 autocomplete="off"
                                                 maxlength="15"
                                                 placeholder="Country code and number"
-                                                required
                                         >
                                 </label>
 
@@ -587,6 +596,7 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 	const department = String(form.get('department') ?? '').trim();
 
 	const phone = String(form.get('phone') ?? '').replace(/\D/g, '');
+	const email = String(form.get('email') ?? '').trim().toLowerCase();
 
 	const timezone = String(form.get('timezone') ?? '');
 
@@ -594,8 +604,16 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 		return 'Enter a valid name and department.';
 	}
 
-	if (!validPhone(phone)) {
-		return 'Enter a valid WhatsApp number with country code.';
+	if (phone && !validPhone(phone)) {
+		return 'Enter a valid WhatsApp number with country code or leave it blank.';
+	}
+
+	if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+		return 'Enter a valid work email.';
+	}
+
+	if (!phone && !email) {
+		return 'Enter a work email or WhatsApp number.';
 	}
 
 	if (!allowedTimezones.has(timezone)) {
@@ -603,6 +621,8 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 	}
 
 	try {
+		const storedPhone = phone || `pending-${crypto.randomUUID()}`;
+		const enrolmentStatus = phone ? 'enrolled' : 'invited';
 		const inserted = await env.DB.prepare(
 			`
                                 INSERT INTO team_members (
@@ -611,13 +631,26 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
                                         department,
                                         timezone,
                                         tenant_id,
-                                        primary_project_id
+                                        primary_project_id,
+                                        email,
+                                        enrolment_status,
+                                        scheduling_enabled
                                 )
-                                VALUES (?, ?, ?, ?, ?, ?)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 RETURNING id
                                 `,
 		)
-			.bind(name, phone, department, timezone, principal.tenantId, projectId)
+			.bind(
+				name,
+				storedPhone,
+				department,
+				timezone,
+				principal.tenantId,
+				projectId,
+				email || null,
+				enrolmentStatus,
+				phone ? 1 : 0,
+			)
 			.first<{ id: number }>();
 		if (!inserted) throw new Error('Member was not inserted.');
 		await env.DB.prepare(
@@ -628,8 +661,15 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 		)
 			.bind(projectId, inserted.id)
 			.run();
+		if (phone) {
+			await env.DB.prepare(`
+				INSERT INTO channel_identities (
+					tenant_id, team_member_id, channel, external_id, display_name
+				) VALUES (?, ?, 'whatsapp', ?, ?)
+			`).bind(principal.tenantId, inserted.id, phone, name).run();
+		}
 	} catch {
-		return 'The member could not be added. The phone number may already exist.';
+		return 'The member could not be added. The email or phone number may already exist.';
 	}
 
 	return null;

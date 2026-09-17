@@ -356,11 +356,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 
 	const received = rows.filter((row) => row.respondedToday).length;
 
-	const pending = total - received;
-
 	const blockers = rows.filter((row) => row.respondedToday && isActiveBlocker(row.blockers)).length;
-
-	const completion = total === 0 ? 0 : Math.round((received / total) * 100);
 
 	const tableRows = rows.length
 		? rows
@@ -652,23 +648,18 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                                         <button type="submit">Open project</button>
                                 </form>
 
-                                ${principal.role === 'admin' ? '<a href="/dashboard/projects">Projects and access</a>' : ''}
-                                <a
-                                        href="/dashboard/members?project=${requestedProject}"
-                                >
-                                        Manage members and schedules
-                                </a>
-
                                 <a
                                         class="cases"
                                         href="/dashboard/cases?project=${requestedProject}"
                                 >
-                                        View coordination cases
+                                        Needs action
                                 </a>
 
                                 <a href="/dashboard?view=history&amp;period=7&amp;project=${requestedProject}">
-                                        View update history
+                                        History
                                 </a>
+
+                                ${principal.role === 'admin' ? `<a href="/dashboard/channels?project=${requestedProject}">Setup</a>` : ''}
 
                                 <form method="post" action="/logout">
                                         <button type="submit">Sign out</button>
@@ -679,7 +670,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                 <section class="cards">
                         <div class="card">
                                 <div class="label">
-                                        Responses received
+                                        Team updates today
                                 </div>
                                 <div class="value">
                                         ${received} / ${total}
@@ -688,25 +679,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 
                         <div class="card">
                                 <div class="label">
-                                        Response completion
-                                </div>
-                                <div class="value">
-                                        ${completion}%
-                                </div>
-                        </div>
-
-                        <div class="card">
-                                <div class="label">
-                                        Pending members
-                                </div>
-                                <div class="value">
-                                        ${pending}
-                                </div>
-                        </div>
-
-                        <div class="card">
-                                <div class="label">
-                                        Active blockers
+                                        Blockers reported today
                                 </div>
                                 <div class="value">
                                         ${blockers}
@@ -715,7 +688,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 
                         <div class="card">
                                 <div class="label">
-                                        Open coordination cases
+                                        Needs action
                                 </div>
                                 <div class="value case-value">
                                         ${openCases}
@@ -724,21 +697,21 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 
                         <div class="card">
                                 <div class="label">
-                                        Voice updates awaiting confirmation
+                                        Awaiting employee confirmation
                                 </div>
                                 <div class="value voice-value">
                                         ${voiceCounts.awaiting}
                                 </div>
                         </div>
 
-                        <div class="card">
+                        ${voiceCounts.failed > 0 ? `<div class="card">
                                 <div class="label">
-                                        Voice transcription failures
+                                        System alerts
                                 </div>
                                 <div class="value failure-value">
                                         ${voiceCounts.failed}
                                 </div>
-                        </div>
+                        </div>` : ''}
                 </section>
 
                 <div class="table-wrap">

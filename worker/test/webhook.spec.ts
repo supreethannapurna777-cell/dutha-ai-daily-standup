@@ -79,6 +79,11 @@ describe("WhatsApp webhook processing", () => {
 				"DELETE FROM incoming_messages",
 			),
 		]);
+		await env.DB.prepare(`
+			INSERT OR IGNORE INTO team_members (
+				name, phone, department, tenant_id, primary_project_id
+			) VALUES ('Test User', '919100000000', 'Testing', 1, 1)
+		`).run();
 	});
 
 	it("stores and processes a text reply", async () => {
@@ -225,6 +230,8 @@ describe("WhatsApp webhook processing", () => {
 			receivedAt: "2023-11-14T22:13:20.000Z",
 			mediaId: "media-webhook-001",
 			mimeType: "audio/ogg; codecs=opus",
+			tenantId: 1,
+			projectId: 1,
 		});
 	});
 

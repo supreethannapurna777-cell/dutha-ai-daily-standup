@@ -204,22 +204,13 @@ describe("secure timezone-aware dashboard", () => {
 
                 expect(response.status).toBe(200);
                 expect(html).toContain("1 / 2");
-                expect(html).toContain("50%");
                 expect(html).toContain(
-                        "Manage members and schedules",
+                        "Needs action",
                 );
                 expect(html).toContain(
-                        "View coordination cases",
+                        "Awaiting employee confirmation",
                 );
-                expect(html).toContain(
-                        "Open coordination cases",
-                );
-                expect(html).toContain(
-                        "Voice updates awaiting confirmation",
-                );
-                expect(html).toContain(
-                        "Voice transcription failures",
-                );
+                expect(html).toContain("Setup");
                 expect(html).toContain(
                         "Asia/Kolkata",
                 );
@@ -331,8 +322,8 @@ describe("secure timezone-aware dashboard", () => {
                         new Date("2026-09-11T09:00:00.000Z"),
                 );
                 const html = await response.text();
-                expect(html).toContain("Response completion");
+                expect(html).toContain("Team updates today");
                 expect(html).toContain("Expected completion");
-                expect(html).toContain("View update history");
+                expect(html).toContain("History");
         });
 });
