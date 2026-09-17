@@ -15,5 +15,8 @@
     "typescript": "^5.5.2",
     "vitest": "~4.1.0",
     "wrangler": "^4.131.0"
+  },
+  "dependencies": {
+    "jose": "^6.2.12"
   }
 }

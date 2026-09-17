@@ -48,6 +48,7 @@ import {
         jiraWebhookAuthorised,
         processJiraWebhook,
 } from "./jira-webhook";
+import { deliverPendingTeamsNotifications, teamsWebhookResponse } from "./teams";
 
 export type { WorkerEnv } from "./env";
 
@@ -263,6 +264,10 @@ export default {
                         return jsonResponse(result);
                 }
 
+                if (request.method === "POST" && url.pathname === "/webhooks/teams") {
+                        return teamsWebhookResponse(request, env);
+                }
+
                 if (
                         request.method === "GET"
                         && url.pathname === "/privacy"
@@ -380,6 +385,7 @@ export default {
                                 ),
                                 retryFailedVoiceUpdates(env),
                                 deliverPendingWhatsappNotifications(env),
+                                deliverPendingTeamsNotifications(env),
                         ]).then(() => undefined),
                 );
         },

@@ -117,9 +117,10 @@ async function eventExists(db: D1Database, messageId: string): Promise<boolean> 
         `).bind(messageId).first());
 }
 
-export async function processWhatsappEnrolment(
+export async function processChannelEnrolment(
         db: D1Database,
-        senderPhone: string,
+        channel: "whatsapp" | "teams",
+        senderExternalId: string,
         senderName: string,
         messageId: string,
         text: string,
@@ -160,8 +161,8 @@ export async function processWhatsappEnrolment(
                 await db.prepare(`
                         INSERT INTO channel_identity_events (
                                 channel, event_type, external_message_id, details
-                        ) VALUES ('whatsapp', 'identity_rejected', ?, ?)
-                `).bind(messageId, "Invalid, expired or exhausted invite").run();
+                        ) VALUES (?, 'identity_rejected', ?, ?)
+                `).bind(channel, messageId, "Invalid, expired or exhausted invite").run();
                 return {
                         handled: true,
                         duplicate: false,
@@ -196,8 +197,8 @@ export async function processWhatsappEnrolment(
                         INSERT INTO channel_identity_events (
                                 tenant_id, channel, event_type,
                                 external_message_id, details
-                        ) VALUES (?, 'whatsapp', 'identity_rejected', ?, ?)
-                `).bind(invite.tenant_id, messageId, "Email is not assigned to this project").run();
+                        ) VALUES (?, ?, 'identity_rejected', ?, ?)
+                `).bind(invite.tenant_id, channel, messageId, "Email is not assigned to this project").run();
                 return {
                         handled: true,
                         duplicate: false,
@@ -206,22 +207,22 @@ export async function processWhatsappEnrolment(
                 };
         }
 
-        const phoneOwner = await db.prepare(`
+        const identityOwner = await db.prepare(`
                 SELECT team_member_id FROM channel_identities
-                WHERE channel = 'whatsapp' AND external_id = ? LIMIT 1
-        `).bind(senderPhone).first<{ team_member_id: number }>();
-        if (phoneOwner && phoneOwner.team_member_id !== member.id) {
+                WHERE channel = ? AND external_id = ? LIMIT 1
+        `).bind(channel, senderExternalId).first<{ team_member_id: number }>();
+        if (identityOwner && identityOwner.team_member_id !== member.id) {
                 await db.prepare(`
                         INSERT INTO channel_identity_events (
                                 tenant_id, team_member_id, channel, event_type,
                                 external_message_id, details
-                        ) VALUES (?, ?, 'whatsapp', 'identity_rejected', ?, ?)
-                `).bind(invite.tenant_id, member.id, messageId, "Number belongs to another member").run();
+                        ) VALUES (?, ?, ?, 'identity_rejected', ?, ?)
+                `).bind(invite.tenant_id, member.id, channel, messageId, "Channel identity belongs to another member").run();
                 return {
                         handled: true,
                         duplicate: false,
                         success: false,
-                        message: "This WhatsApp number is already linked. Ask your administrator for help.",
+                    message: `This ${channel} account is already linked. Ask your administrator for help.`,
                 };
         }
 
@@ -231,18 +232,19 @@ export async function processWhatsappEnrolment(
                                 INSERT INTO channel_identities (
                                         tenant_id, team_member_id, channel,
                                         external_id, display_name
-                                ) VALUES (?, ?, 'whatsapp', ?, ?)
+                                ) VALUES (?, ?, ?, ?, ?)
                                 ON CONFLICT(team_member_id, channel) DO UPDATE SET
                                         external_id = excluded.external_id,
                                         display_name = excluded.display_name,
                                         verified_at = CURRENT_TIMESTAMP,
                                         updated_at = CURRENT_TIMESTAMP
-                        `).bind(invite.tenant_id, member.id, senderPhone, senderName),
+                        `).bind(invite.tenant_id, member.id, channel, senderExternalId, senderName),
                         db.prepare(`
                                 UPDATE team_members
-                                SET phone = ?, enrolment_status = 'enrolled'
+                                SET phone = CASE WHEN ? = 'whatsapp' THEN ? ELSE phone END,
+                                        enrolment_status = 'enrolled'
                                 WHERE id = ? AND tenant_id = ?
-                        `).bind(senderPhone, member.id, invite.tenant_id),
+                        `).bind(channel, senderExternalId, member.id, invite.tenant_id),
                         db.prepare(`
                                 UPDATE enrolment_invites
                                 SET use_count = use_count + 1
@@ -252,15 +254,15 @@ export async function processWhatsappEnrolment(
                                 INSERT INTO channel_identity_events (
                                         tenant_id, team_member_id, channel, event_type,
                                         external_message_id, details
-                                ) VALUES (?, ?, 'whatsapp', 'identity_connected', ?, ?)
-                        `).bind(invite.tenant_id, member.id, messageId, `Project ${invite.project_id}`),
+                                ) VALUES (?, ?, ?, 'identity_connected', ?, ?)
+                        `).bind(invite.tenant_id, member.id, channel, messageId, `Project ${invite.project_id}`),
                 ]);
         } catch {
                 return {
                         handled: true,
                         duplicate: false,
                         success: false,
-                        message: "Dutha could not connect this number. Ask your administrator to check the member record.",
+                    message: `Dutha could not connect this ${channel} account. Ask your administrator to check the member record.`,
                 };
         }
 
@@ -268,6 +270,17 @@ export async function processWhatsappEnrolment(
                 handled: true,
                 duplicate: false,
                 success: true,
-                message: `Welcome ${member.name}. Your WhatsApp account is now connected to Dutha.`,
+                message: `Welcome ${member.name}. Your ${channel} account is now connected to Dutha.`,
         };
+}
+
+export async function processWhatsappEnrolment(
+        db: D1Database,
+        senderPhone: string,
+        senderName: string,
+        messageId: string,
+        text: string,
+        now = new Date(),
+): Promise<EnrolmentResult> {
+        return processChannelEnrolment(db, "whatsapp", senderPhone, senderName, messageId, text, now);
 }
