@@ -82,7 +82,8 @@ async function memberFromSession(request: Request, env: WorkerEnv): Promise<numb
 
 function sameOrigin(request: Request): boolean {
 	const origin = request.headers.get('Origin');
-	return origin ? origin === new URL(request.url).origin : request.headers.get('Sec-Fetch-Site') === 'same-origin';
+	if (origin && origin !== 'null') return origin === new URL(request.url).origin;
+	return request.headers.get('Sec-Fetch-Site') === 'same-origin';
 }
 
 function strongPassword(value: string): boolean {
@@ -169,4 +170,3 @@ export async function employeePortalResponse(request: Request, env: WorkerEnv): 
 	if (!memberId) return Response.redirect(`${new URL(request.url).origin}/employee/login`, 302);
 	return dashboardResponse(request, env, memberId);
 }
-

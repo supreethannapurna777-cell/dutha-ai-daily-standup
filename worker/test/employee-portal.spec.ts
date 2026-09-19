@@ -53,6 +53,19 @@ describe('employee portal', () => {
 		expect(await reused.text()).toContain('invalid, expired or already used');
 	});
 
+	it('accepts a same-site activation form when the browser reports a null origin', async () => {
+		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
+		const request = post('/employee/activate', {
+			token,
+			password: 'StrongPassword123',
+			confirm_password: 'StrongPassword123',
+		});
+		request.headers.set('Origin', 'null');
+		request.headers.set('Sec-Fetch-Site', 'same-origin');
+		const response = await employeePortalResponse(request, portalEnv);
+		expect(response.status).toBe(303);
+	});
+
 	it('logs in and shows available and coming-soon channels', async () => {
 		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
 		await employeePortalResponse(post('/employee/activate', {
@@ -87,4 +100,3 @@ describe('employee portal', () => {
 		expect(invite?.max_uses).toBe(1);
 	});
 });
-
