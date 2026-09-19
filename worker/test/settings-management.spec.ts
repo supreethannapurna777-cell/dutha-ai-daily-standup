@@ -1,0 +1,28 @@
+import { env } from 'cloudflare:test';
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { WorkerEnv } from '../src/env';
+import { settingsManagementResponse } from '../src/settings-management';
+
+const settingsEnv = { ...env, DASHBOARD_USERNAME:'admin', DASHBOARD_PASSWORD:'password' } as WorkerEnv;
+
+function request(method = 'GET', body?: string): Request {
+	return new Request('https://example.com/dashboard/settings', { method, headers:{ Authorization:`Basic ${btoa('admin:password')}`, 'X-Dutha-User-Id':'1', 'X-Dutha-Tenant-Id':'1', 'X-Dutha-Tenant-Role':'admin', ...(method === 'POST' ? { Origin:'https://example.com', 'Content-Type':'application/x-www-form-urlencoded' } : {}) }, body });
+}
+
+describe('organisation email settings', () => {
+	beforeEach(async () => env.DB.prepare(`DELETE FROM organisation_email_settings WHERE tenant_id=1`).run());
+
+	it('saves editable sender identity without storing an API key', async () => {
+		const response = await settingsManagementResponse(request('POST', new URLSearchParams({ action:'save', company_name:'Aurowise', sender_name:'Dutha WorkOps', from_email:'dutha@example.com', reply_to_email:'ops@example.com' }).toString()), settingsEnv);
+		expect(response.status).toBe(303);
+		const row = await env.DB.prepare(`SELECT company_name, sender_name, from_email, reply_to_email FROM organisation_email_settings WHERE tenant_id=1`).first();
+		expect(row).toEqual({ company_name:'Aurowise', sender_name:'Dutha WorkOps', from_email:'dutha@example.com', reply_to_email:'ops@example.com' });
+		expect(JSON.stringify(row)).not.toContain('API');
+	});
+
+	it('rejects project managers from organisation settings', async () => {
+		const denied = request();
+		denied.headers.set('X-Dutha-Tenant-Role', 'project_manager');
+		expect((await settingsManagementResponse(denied, settingsEnv)).status).toBe(403);
+	});
+});

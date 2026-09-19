@@ -90,17 +90,30 @@ describe('employee portal', () => {
 		expect(html.match(/Coming soon/g)?.length).toBeGreaterThanOrEqual(3);
 	});
 
-	it('opens Dutha WhatsApp with a personal JOIN instruction prefilled', async () => {
+	it('shows a secure desktop QR code with a personal JOIN instruction', async () => {
 		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
 		await employeePortalResponse(post('/employee/activate', { token, password: 'StrongPassword123', confirm_password: 'StrongPassword123' }), portalEnv);
 		const login = await employeePortalResponse(post('/employee/login', { email: 'employee@example.com', password: 'StrongPassword123' }), portalEnv);
 		const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
 		const response = await employeePortalResponse(post('/employee', { action: 'connect_whatsapp' }, cookie), portalEnv);
-		expect(response.status).toBe(303);
-		const location = response.headers.get('Location') ?? '';
-		expect(location).toMatch(/^https:\/\/wa\.me\/917013298834\?text=/);
-		expect(decodeURIComponent(location)).toMatch(/JOIN [A-Z0-9]{10} employee@example\.com/);
+		expect(response.status).toBe(200);
+		const html = await response.text();
+		expect(html).toContain('<svg');
+		expect(html).toContain('Scan this QR code');
+		expect(html).toMatch(/JOIN [A-Z0-9]{10} employee@example\.com/);
 		const invite = await env.DB.prepare(`SELECT max_uses FROM enrolment_invites WHERE project_id=1 ORDER BY id DESC LIMIT 1`).first<{ max_uses:number }>();
 		expect(invite?.max_uses).toBe(1);
+	});
+
+	it('opens WhatsApp directly with the JOIN message on mobile', async () => {
+		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
+		await employeePortalResponse(post('/employee/activate', { token, password: 'StrongPassword123', confirm_password: 'StrongPassword123' }), portalEnv);
+		const login = await employeePortalResponse(post('/employee/login', { email: 'employee@example.com', password: 'StrongPassword123' }), portalEnv);
+		const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+		const request = post('/employee', { action: 'connect_whatsapp' }, cookie);
+		request.headers.set('User-Agent', 'Mozilla/5.0 (Linux; Android 15) Mobile');
+		const response = await employeePortalResponse(request, portalEnv);
+		expect(response.status).toBe(303);
+		expect(decodeURIComponent(response.headers.get('Location') ?? '')).toMatch(/^https:\/\/wa\.me\/917013298834\?text=JOIN [A-Z0-9]{10} employee@example\.com$/);
 	});
 });

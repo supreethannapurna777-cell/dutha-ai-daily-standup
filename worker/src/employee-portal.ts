@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './env';
 import { generateEnrolmentCode, hashEnrolmentCode } from './enrolment';
+import QRCode from 'qrcode';
 
 const COOKIE_NAME = 'dutha_employee_session';
 const SESSION_SECONDS = 8 * 60 * 60;
@@ -158,10 +159,15 @@ async function dashboardResponse(request: Request, env: WorkerEnv, memberId: num
 			const code = generateEnrolmentCode();
 			await env.DB.prepare(`INSERT INTO enrolment_invites (tenant_id, project_id, created_by_management_user_id, code_hash, expires_at, max_uses) VALUES (?, ?, 1, ?, ?, 1)`).bind(member.tenant_id, member.primary_project_id, await hashEnrolmentCode(code), new Date(Date.now()+30*60*1000).toISOString()).run();
 			const message = `JOIN ${code} ${member.email}`;
+			const whatsappUrl = `https://wa.me/${businessNumber}?text=${encodeURIComponent(message)}`;
+			if (!/Android|iPhone|iPad|iPod|Mobile/i.test(request.headers.get('User-Agent') ?? '')) {
+				const qr = await QRCode.toString(whatsappUrl, { type: 'svg', width: 240, margin: 1, errorCorrectionLevel: 'M' });
+				return page('Connect WhatsApp', `<section class="card"><h1>Connect WhatsApp</h1><p class="muted">Scan this QR code using your phone, or open WhatsApp on this computer. The message and Dutha number are already filled in.</p><div style="display:grid;place-items:center;padding:18px;background:#fff">${qr}</div><p><a class="button" href="${escapeHtml(whatsappUrl)}">Open WhatsApp</a></p><code>${escapeHtml(message)}</code><p class="muted">Send the message within 30 minutes. The WhatsApp number that sends it becomes your verified Dutha channel.</p><a class="button secondary" href="/employee">Return to dashboard</a></section>`);
+			}
 			return new Response(null, {
 				status: 303,
 				headers: {
-					Location: `https://wa.me/${businessNumber}?text=${encodeURIComponent(message)}`,
+					Location: whatsappUrl,
 					'Cache-Control': 'no-store',
 				},
 			});

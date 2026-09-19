@@ -30,4 +30,5 @@ export interface WorkerEnv {
 	MICROSOFT_APP_PASSWORD?: string;
 	MICROSOFT_TENANT_ID?: string;
 	TEAMS_RELEASE_ENABLED?: string;
+	RESEND_API_KEY?: string;
 }

@@ -4,6 +4,7 @@ import {
 } from "./access-control";
 import type { WorkerEnv } from "./env";
 import { createManagerActivation } from "./auth";
+import { sendManagerActivationEmail } from "./email";
 
 interface ProjectRow {
         id: number;
@@ -336,10 +337,11 @@ async function render(
         actor: ManagementPrincipal,
         error: string | null = null,
 	activationUrl: string | null = null,
+	message: string | null = null,
 ): Promise<Response> {
         const rows = await data(env.DB, actor.tenantId);
         const updated = new URL(request.url).searchParams.get("updated");
-        return response(page(rows.projects, rows.managers, rows.members, updated ? "Projects and access updated." : null, error, activationUrl), error ? 400 : 200);
+        return response(page(rows.projects, rows.managers, rows.members, message ?? (updated ? "Projects and access updated." : null), error, activationUrl), error ? 400 : 200);
 }
 
 async function managerActivation(
@@ -350,6 +352,8 @@ async function managerActivation(
 ): Promise<Response> {
 	const action = String(form.get("action") ?? "");
 	let managerId: number;
+	let managerEmail: string;
+	let managerName: string;
 	if (action === "create_manager") {
 		const displayName = String(form.get("display_name") ?? "").trim();
 		const email = String(form.get("email") ?? "").trim().toLowerCase();
@@ -359,17 +363,24 @@ async function managerActivation(
 			const created = await env.DB.prepare(`INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role) VALUES (?, ?, ?, ?, ?) RETURNING id`).bind(actor.tenantId, email, displayName, email, role).first<{ id:number }>();
 			if (!created) return render(request, env, actor, "Management user could not be created.");
 			managerId = created.id;
+			managerEmail = email;
+			managerName = displayName;
 		} catch {
 			return render(request, env, actor, "That management user already exists.");
 		}
 	} else {
 		managerId = Number(form.get("management_user_id"));
-		const manager = Number.isSafeInteger(managerId) ? await env.DB.prepare(`SELECT email FROM management_users WHERE id=? AND tenant_id=? AND active=1 LIMIT 1`).bind(managerId, actor.tenantId).first<{ email:string|null }>() : null;
+		const manager = Number.isSafeInteger(managerId) ? await env.DB.prepare(`SELECT display_name, email FROM management_users WHERE id=? AND tenant_id=? AND active=1 LIMIT 1`).bind(managerId, actor.tenantId).first<{ display_name:string; email:string|null }>() : null;
 		if (!manager?.email) return render(request, env, actor, "Management user with a work email was not found.");
+		managerEmail = manager.email;
+		managerName = manager.display_name;
 	}
 	const token = await createManagerActivation(env.DB, managerId);
 	const activationUrl = `${new URL(request.url).origin}/manager/activate?token=${encodeURIComponent(token)}`;
-	return render(request, env, actor, null, activationUrl);
+	const delivery = await sendManagerActivationEmail(env, actor.tenantId, managerEmail, managerName, activationUrl);
+	return delivery.sent
+		? render(request, env, actor, null, null, `Invitation sent to ${managerEmail}.`)
+		: render(request, env, actor, null, activationUrl, `Email was not sent: ${delivery.reason ?? 'Unknown error'} Use the secure fallback link below.`);
 }
 
 export async function projectManagementResponse(

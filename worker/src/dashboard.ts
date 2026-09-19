@@ -661,6 +661,8 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 
                                 ${principal.role === 'admin' ? `<a href="/dashboard/channels?project=${requestedProject}">Setup</a>` : ''}
 
+				${principal.role === 'admin' ? '<a href="/dashboard/settings">Settings</a>' : ''}
+
                                 <form method="post" action="/logout">
                                         <button type="submit">Sign out</button>
                                 </form>

@@ -53,6 +53,7 @@ import { teamsWebhookResponse } from "./teams";
 import { recoverIntegrationPipeline } from "./pipeline-reliability";
 import { deploymentPreflightResponse } from "./deployment-preflight";
 import { employeePortalResponse } from "./employee-portal";
+import { settingsManagementResponse } from "./settings-management";
 
 export type { WorkerEnv } from "./env";
 
@@ -342,6 +343,10 @@ export default {
                 if (request.method === "GET" && url.pathname === "/dashboard/preflight") {
                         return deploymentPreflightResponse(env);
                 }
+
+                if (url.pathname === "/dashboard/settings") {
+			return settingsManagementResponse(managementRequest, env);
+		}
 
                 if (
                         url.pathname
