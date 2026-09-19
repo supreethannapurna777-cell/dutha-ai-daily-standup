@@ -31,6 +31,13 @@ function request(
 
 describe("project and access management", () => {
         beforeEach(async () => {
+		await env.DB.prepare(`
+			DELETE FROM team_member_projects
+			WHERE project_id > 1 OR team_member_id IN (
+				SELECT id FROM team_members WHERE name LIKE 'Project Test %' OR tenant_id > 1
+			)
+		`).run();
+		await env.DB.prepare("DELETE FROM team_members WHERE name LIKE 'Project Test %' OR tenant_id > 1").run();
                 await env.DB.prepare("DELETE FROM project_memberships WHERE project_id > 1 OR management_user_id > 1").run();
                 await env.DB.prepare("DELETE FROM management_users WHERE id > 1").run();
                 await env.DB.prepare("DELETE FROM projects WHERE id > 1").run();
@@ -99,4 +106,98 @@ describe("project and access management", () => {
                 `).bind(member.id).first<{ found: number }>();
                 expect(assignment).toBeNull();
         });
+
+	it("renders department teams and bulk-assignment confirmations", async () => {
+		await env.DB.prepare(`
+			INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id)
+			VALUES ('Project Test Developer', 'project-test-render', 'DevOps', 1, 1)
+		`).run();
+
+		const response = await projectManagementResponse(request(), testEnv);
+		const html = await response.text();
+		expect(response.status).toBe(200);
+		expect(html).toContain("Teams");
+		expect(html).toContain("DevOps");
+		expect(html).toContain("Assign team");
+		expect(html).toContain("Assign all members");
+		expect(html).toContain("Assign entire team?");
+		expect(html).toContain("Assign all members?");
+	});
+
+	it("assigns only the selected department from the authenticated tenant", async () => {
+		const tenant = await env.DB.prepare(`
+			INSERT INTO tenants (slug, name) VALUES ('project-test-other', 'Project Test Other')
+			RETURNING id
+		`).first<{ id: number }>();
+		if (!tenant) throw new Error("Tenant not created.");
+		await env.DB.batch([
+			env.DB.prepare(`INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id) VALUES (?, ?, ?, ?, ?)`)
+				.bind("Project Test Dev One", "project-test-dev-one", "DevOps", 1, 1),
+			env.DB.prepare(`INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id) VALUES (?, ?, ?, ?, ?)`)
+				.bind("Project Test Dev Two", "project-test-dev-two", "DevOps", 1, 1),
+			env.DB.prepare(`INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id) VALUES (?, ?, ?, ?, ?)`)
+				.bind("Project Test SAP", "project-test-sap", "SAP", 1, 1),
+			env.DB.prepare(`INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id) VALUES (?, ?, ?, ?, ?)`)
+				.bind("Project Test Other Dev", "project-test-other-dev", "DevOps", tenant.id, 1),
+		]);
+
+		const response = await projectManagementResponse(
+			request("POST", new URLSearchParams({ action: "add_team", project_id: "1", department: "DevOps" }).toString()),
+			testEnv,
+		);
+		expect(response.status).toBe(303);
+		const assignedRows = await env.DB.prepare(`
+			SELECT member.name
+			FROM team_member_projects AS assignment
+			JOIN team_members AS member ON member.id = assignment.team_member_id
+			WHERE assignment.project_id = 1 AND member.name LIKE 'Project Test %'
+			ORDER BY member.name
+		`).all<{ name: string }>();
+		expect(assignedRows.results.map((row) => row.name)).toEqual([
+			"Project Test Dev One",
+			"Project Test Dev Two",
+		]);
+	});
+
+	it("assigns every active member from the authenticated tenant only", async () => {
+		const tenant = await env.DB.prepare(`
+			INSERT INTO tenants (slug, name) VALUES ('project-test-bulk-other', 'Project Test Bulk Other')
+			RETURNING id
+		`).first<{ id: number }>();
+		if (!tenant) throw new Error("Tenant not created.");
+		await env.DB.batch([
+			env.DB.prepare(`INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id) VALUES (?, ?, ?, ?, ?)`)
+				.bind("Project Test Bulk One", "project-test-bulk-one", "DevOps", 1, 1),
+			env.DB.prepare(`INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id) VALUES (?, ?, ?, ?, ?)`)
+				.bind("Project Test Bulk Two", "project-test-bulk-two", "SAP", 1, 1),
+			env.DB.prepare(`INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id) VALUES (?, ?, ?, ?, ?)`)
+				.bind("Project Test Bulk Other", "project-test-bulk-other", "SAP", tenant.id, 1),
+		]);
+
+		const response = await projectManagementResponse(
+			request("POST", "action=add_all_members&project_id=1"),
+			testEnv,
+		);
+		expect(response.status).toBe(303);
+		const assignedRows = await env.DB.prepare(`
+			SELECT member.name
+			FROM team_member_projects AS assignment
+			JOIN team_members AS member ON member.id = assignment.team_member_id
+			WHERE assignment.project_id = 1 AND member.name LIKE 'Project Test Bulk %'
+			ORDER BY member.name
+		`).all<{ name: string }>();
+		expect(assignedRows.results.map((row) => row.name)).toEqual([
+			"Project Test Bulk One",
+			"Project Test Bulk Two",
+		]);
+	});
+
+	it("rejects an unknown team", async () => {
+		const response = await projectManagementResponse(
+			request("POST", "action=add_team&project_id=1&department=Missing-Team"),
+			testEnv,
+		);
+		expect(response.status).toBe(400);
+		expect(await response.text()).toContain("Team was not found.");
+	});
 });

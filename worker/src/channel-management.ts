@@ -10,6 +10,7 @@ import {
 } from "./enrolment";
 import type { WorkerEnv } from "./env";
 import { integrationReadiness, type IntegrationReadiness } from "./pipeline-reliability";
+import { sendTemplateMessage } from "./whatsapp";
 
 interface MemberChannelRow {
         id: number;
@@ -19,6 +20,7 @@ interface MemberChannelRow {
         enrolment_status: string;
         whatsapp_connected: number;
         teams_connected: number;
+		has_whatsapp_number: number;
 }
 
 interface InviteRow {
@@ -168,6 +170,9 @@ async function members(
                                 WHERE identity.team_member_id = member.id
                                         AND identity.channel = 'teams'
                         ) AS teams_connected
+						, CASE WHEN member.phone NOT LIKE 'pending-%'
+								AND member.phone NOT LIKE 'removed-%'
+								AND length(member.phone) >= 8 THEN 1 ELSE 0 END AS has_whatsapp_number
                 FROM team_members AS member
                 WHERE member.tenant_id = ? AND member.active = 1
                         AND (
@@ -228,8 +233,13 @@ function page(
                                         <button type="submit">Save</button>
                                 </form>
                         </td>
-                        <td>${statusPill(Boolean(member.whatsapp_connected), member.whatsapp_connected ? "Connected" : "Not connected")}</td>
+                        <td>
+                                ${statusPill(Boolean(member.whatsapp_connected), member.whatsapp_connected ? "Connected" : "Not connected")}
+                                ${member.whatsapp_connected ? `<form method="post" class="inline-action"><input type="hidden" name="action" value="reset_whatsapp"><input type="hidden" name="project_id" value="${projectId}"><input type="hidden" name="member_id" value="${member.id}"><button class="secondary" type="submit">Reset connection</button></form>` : ""}
+								${!member.whatsapp_connected && member.has_whatsapp_number ? `<form method="post" class="inline-action"><input type="hidden" name="action" value="send_direct_invite"><input type="hidden" name="project_id" value="${projectId}"><input type="hidden" name="member_id" value="${member.id}"><button type="submit">Send invite</button></form>` : ""}
+                        </td>
                         <td>${statusPill(Boolean(member.teams_connected), member.teams_connected ? "Connected" : "Not connected")}</td>
+                        <td><details><summary>Remove</summary><form method="post" class="remove-form"><input type="hidden" name="action" value="remove_member"><input type="hidden" name="project_id" value="${projectId}"><input type="hidden" name="member_id" value="${member.id}"><label>Type <strong>${escapeHtml(member.name)}</strong><input name="confirm_name" autocomplete="off" required></label><button class="danger" type="submit">Remove employee</button></form></details></td>
                 </tr>
         `).join("");
 
@@ -245,7 +255,7 @@ function page(
 
         return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Channels and enrolment · Dutha WorkOps</title><style>
-:root{font-family:Inter,Arial,sans-serif;color:#172033;background:#f5f7fb}*{box-sizing:border-box}body{margin:0;padding:28px}main{max-width:1180px;margin:auto}header{display:flex;justify-content:space-between;gap:20px;align-items:start;margin-bottom:20px}h1,h2{color:#173f6b}h1{margin:0 0 6px}.muted,small{display:block;color:#64748b}.back{color:#1769aa;font-weight:700}.notice,.error,.code{padding:14px;border-radius:10px;margin:14px 0}.notice{background:#dcfce7;color:#166534}.error{background:#fee2e2;color:#991b1b}.code{background:#eff6ff;border:1px solid #93c5fd}.code strong{display:block;font-size:22px;letter-spacing:2px;color:#173f6b;margin:8px 0}.toolbar,.card{background:#fff;border-radius:14px;box-shadow:0 3px 14px #0f172a12;padding:20px;margin-bottom:18px}.toolbar{display:flex;justify-content:space-between;gap:14px;align-items:end}.toolbar form{display:flex;gap:9px;align-items:end}.integrations{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}.integration{background:#fff;border-radius:14px;box-shadow:0 3px 14px #0f172a12;padding:18px}.integration h2{font-size:18px;margin:0 0 8px}.pill{display:inline-block;padding:5px 9px;border-radius:99px;font-size:12px;font-weight:800}.connected{background:#dcfce7;color:#166534}.pending{background:#f1f5f9;color:#475569}select,input{padding:10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit}input[type=file]{max-width:100%}button{border:0;border-radius:8px;padding:10px 13px;background:#1769aa;color:#fff;font-weight:700;cursor:pointer}.danger{background:#b91c1c;padding:7px 10px}.create,.import-form{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.create label,.import-form label{display:grid;gap:6px}.email-form,.invite-actions{display:flex;gap:7px}.email-form input{min-width:230px}.import-help{background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:11px;margin:10px 0}.import-help code{display:block;margin-top:5px;overflow-wrap:anywhere}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px;border-bottom:1px solid #e5e7eb;vertical-align:middle}th{color:#475569;font-size:13px}.scroll{overflow:auto}.actions{display:flex;gap:10px;flex-wrap:wrap}.actions a{color:#1769aa;font-weight:700}@media(max-width:800px){body{padding:14px}header,.toolbar{flex-direction:column}.integrations{grid-template-columns:1fr}.email-form{min-width:260px}table{min-width:850px}}
+:root{font-family:Inter,Arial,sans-serif;color:#172033;background:#f5f7fb}*{box-sizing:border-box}body{margin:0;padding:28px}main{max-width:1180px;margin:auto}header{display:flex;justify-content:space-between;gap:20px;align-items:start;margin-bottom:20px}h1,h2{color:#173f6b}h1{margin:0 0 6px}.muted,small{display:block;color:#64748b}.back{color:#1769aa;font-weight:700}.notice,.error,.code{padding:14px;border-radius:10px;margin:14px 0}.notice{background:#dcfce7;color:#166534}.error{background:#fee2e2;color:#991b1b}.code{background:#eff6ff;border:1px solid #93c5fd}.code strong{display:block;font-size:22px;letter-spacing:2px;color:#173f6b;margin:8px 0}.toolbar,.card{background:#fff;border-radius:14px;box-shadow:0 3px 14px #0f172a12;padding:20px;margin-bottom:18px}.toolbar{display:flex;justify-content:space-between;gap:14px;align-items:end}.toolbar form{display:flex;gap:9px;align-items:end}.integrations{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}.integration{background:#fff;border-radius:14px;box-shadow:0 3px 14px #0f172a12;padding:18px}.integration h2{font-size:18px;margin:0 0 8px}.pill{display:inline-block;padding:5px 9px;border-radius:99px;font-size:12px;font-weight:800}.connected{background:#dcfce7;color:#166534}.pending{background:#f1f5f9;color:#475569}select,input{padding:10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit}input[type=file]{max-width:100%}button{border:0;border-radius:8px;padding:10px 13px;background:#1769aa;color:#fff;font-weight:700;cursor:pointer}.secondary{background:#475569;padding:7px 10px}.danger{background:#b91c1c;padding:7px 10px}.create,.import-form{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.create label,.import-form label{display:grid;gap:6px}.email-form,.invite-actions{display:flex;gap:7px}.email-form input{min-width:230px}.inline-action{margin-top:7px}.remove-form{display:grid;gap:7px;margin-top:8px;min-width:180px}.remove-form label{font-size:12px}.remove-form input{display:block;width:100%;margin-top:4px;padding:7px}summary{cursor:pointer;color:#b91c1c;font-weight:700}.import-help{background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:11px;margin:10px 0}.import-help code{display:block;margin-top:5px;overflow-wrap:anywhere}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px;border-bottom:1px solid #e5e7eb;vertical-align:middle}th{color:#475569;font-size:13px}.scroll{overflow:auto}.actions{display:flex;gap:10px;flex-wrap:wrap}.actions a{color:#1769aa;font-weight:700}@media(max-width:800px){body{padding:14px}header,.toolbar{flex-direction:column}.integrations{grid-template-columns:1fr}.email-form{min-width:260px}table{min-width:980px}}
 </style></head><body><main><header><div><h1>Channels and enrolment</h1><div class="muted">Connect people once, then let Dutha coordinate across channels.</div></div><a class="back" href="/dashboard?project=${projectId}">Return to dashboard</a></header>
 ${notice ? `<div class="notice">${escapeHtml(notice)}</div>` : ""}${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
 ${generatedCode ? `<div class="code"><span>Share this instruction only with people assigned to this project:</span><strong>JOIN ${escapeHtml(generatedCode)} work-email@company.com</strong><span>The code is shown only now. Employees replace the example with their own saved work email.</span></div>` : ""}
@@ -253,7 +263,7 @@ ${generatedCode ? `<div class="code"><span>Share this instruction only with peop
 <section class="integrations"><article class="integration"><h2>WhatsApp</h2>${statusPill(whatsappReady, whatsappReady ? "Configured" : "Needs configuration")}<p class="muted">Pending ${readiness.whatsapp.pending} · Failed ${readiness.whatsapp.failed}</p></article><article class="integration"><h2>Microsoft Teams</h2>${teamsStatus}<p class="muted">Pending ${readiness.teams.pending} · Failed ${readiness.teams.failed}</p></article><article class="integration"><h2>Jira / Atlassian</h2>${statusPill(jiraReady, jiraReady ? "Configured" : "Needs API or webhook configuration")}<p class="muted">Pending ${readiness.jira.pending} · Failed ${readiness.jira.failed}</p></article></section>
 <section class="card"><h2>Add employees from CSV</h2><p class="muted">Import up to ${csvMemberLimit} employees into this project. No phone numbers are required.</p><div class="import-help">Required header:<code>name,email,department,timezone</code><small>Supported timezones: Asia/Kolkata and Europe/London.</small></div><form method="post" enctype="multipart/form-data" class="import-form"><input type="hidden" name="action" value="import_members"><input type="hidden" name="project_id" value="${projectId}"><label>CSV file<input type="file" name="members_csv" accept=".csv,text/csv" required></label><button type="submit">Import employees</button></form></section>
 <section class="card"><h2>Invite this project</h2><p class="muted">First save each employee's work email. One invitation code can then enrol the assigned project members.</p><form method="post" class="create"><input type="hidden" name="action" value="create_invite"><input type="hidden" name="project_id" value="${projectId}"><label>Expires after<select name="expiry_days"><option value="1">1 day</option><option value="3" selected>3 days</option><option value="7">7 days</option></select></label><label>Maximum joins<input type="number" name="max_uses" min="1" max="1000" value="100"></label><button type="submit">Create invitation</button></form></section>
-<section class="card"><h2>Employee identities</h2><p class="muted">Phone numbers and external IDs remain private. Only connection status is shown.</p><div class="scroll"><table><thead><tr><th>Employee</th><th>Work email</th><th>WhatsApp</th><th>Teams</th></tr></thead><tbody>${memberRows || '<tr><td colspan="4">No members assigned to this project.</td></tr>'}</tbody></table></div></section>
+<section class="card"><h2>Employee identities</h2><p class="muted">Reset a WhatsApp connection to reuse the same number in enrolment tests. Removing an employee preserves historical stand-up records.</p><div class="scroll"><table><thead><tr><th>Employee</th><th>Work email</th><th>WhatsApp</th><th>Teams</th><th>Actions</th></tr></thead><tbody>${memberRows || '<tr><td colspan="5">No members assigned to this project.</td></tr>'}</tbody></table></div></section>
 <section class="card"><h2>Recent invitations</h2><div class="scroll"><table><thead><tr><th>Created</th><th>Expires</th><th>Joins</th><th>Status</th><th></th></tr></thead><tbody>${inviteTable || '<tr><td colspan="5">No invitations created.</td></tr>'}</tbody></table></div></section>
 </main></body></html>`;
 }
@@ -376,6 +386,115 @@ export async function channelManagementResponse(
                         return render(request, env, actor, selectedProject, null, null, "That email is already assigned in this company.");
                 }
                 return render(request, env, actor, selectedProject, null, "Work email saved.");
+        }
+
+		if (action === "send_direct_invite") {
+				const memberId = Number(form.get("member_id"));
+				if (!Number.isSafeInteger(memberId) || memberId <= 0) {
+						return render(request, env, actor, selectedProject, null, null, "Invalid employee.");
+				}
+				const member = await env.DB.prepare(`
+						SELECT id, name, phone FROM team_members
+						WHERE id = ? AND tenant_id = ? AND active = 1
+								AND phone NOT LIKE 'pending-%' AND phone NOT LIKE 'removed-%'
+								AND (primary_project_id = ? OR EXISTS (
+										SELECT 1 FROM team_member_projects
+										WHERE team_member_id = team_members.id AND project_id = ?
+								))
+				`).bind(memberId, actor.tenantId, selectedProject, selectedProject).first<{ id: number; name: string; phone: string }>();
+				if (!member) {
+						return render(request, env, actor, selectedProject, null, null, "Add the employee's WhatsApp number first.");
+				}
+				const sent = await sendTemplateMessage(
+						env,
+						member.phone,
+						env.WHATSAPP_ENROLMENT_TEMPLATE_NAME || "dutha_enrolment_invitation",
+						[member.name],
+				);
+				if (!sent.success) {
+						return render(request, env, actor, selectedProject, null, null, `WhatsApp invitation failed: ${sent.error || "Unknown error"}`);
+				}
+				await env.DB.batch([
+						env.DB.prepare(`
+								UPDATE team_members
+								SET enrolment_status = 'invited', scheduling_enabled = 0
+								WHERE id = ? AND tenant_id = ?
+						`).bind(member.id, actor.tenantId),
+						env.DB.prepare(`
+								INSERT INTO direct_whatsapp_invites (
+										team_member_id, tenant_id, project_id, expires_at
+								) VALUES (?, ?, ?, ?)
+								ON CONFLICT(team_member_id) DO UPDATE SET
+										tenant_id = excluded.tenant_id,
+										project_id = excluded.project_id,
+										expires_at = excluded.expires_at,
+										updated_at = CURRENT_TIMESTAMP
+						`).bind(member.id, actor.tenantId, selectedProject, new Date(now.getTime() + 3 * 86_400_000).toISOString()),
+						env.DB.prepare(`
+								INSERT INTO channel_identity_events (
+										tenant_id, team_member_id, channel, event_type, details
+								) VALUES (?, ?, 'whatsapp', 'invite_created', ?)
+						`).bind(actor.tenantId, member.id, `Direct project ${selectedProject}; message ${sent.messageId || "accepted"}`),
+				]);
+				return render(request, env, actor, selectedProject, null, `Invitation sent to ${member.name}. They only need to reply YES.`);
+		}
+
+        if (action === "reset_whatsapp" || action === "remove_member") {
+                const memberId = Number(form.get("member_id"));
+                if (!Number.isSafeInteger(memberId) || memberId <= 0) {
+                        return render(request, env, actor, selectedProject, null, null, "Invalid employee.");
+                }
+                const member = await env.DB.prepare(`
+                        SELECT id, name FROM team_members
+                        WHERE id = ? AND tenant_id = ? AND active = 1 AND (
+                                primary_project_id = ? OR EXISTS (
+                                        SELECT 1 FROM team_member_projects
+                                        WHERE team_member_id = team_members.id AND project_id = ?
+                                )
+                        )
+                `).bind(memberId, actor.tenantId, selectedProject, selectedProject).first<{ id: number; name: string }>();
+                if (!member) {
+                        return render(request, env, actor, selectedProject, null, null, "Employee was not found.");
+                }
+
+                if (action === "reset_whatsapp") {
+                        await env.DB.batch([
+                                env.DB.prepare(`
+                                        DELETE FROM channel_identities
+                                        WHERE tenant_id = ? AND team_member_id = ? AND channel = 'whatsapp'
+                                `).bind(actor.tenantId, memberId),
+                                env.DB.prepare(`
+                                        UPDATE team_members
+                                        SET phone = ?, enrolment_status = 'invited', scheduling_enabled = 0
+                                        WHERE id = ? AND tenant_id = ?
+                                `).bind(`pending-${crypto.randomUUID()}`, memberId, actor.tenantId),
+								env.DB.prepare(`DELETE FROM direct_whatsapp_invites WHERE team_member_id = ?`).bind(memberId),
+                        ]);
+                        return render(request, env, actor, selectedProject, null, `${member.name}'s WhatsApp connection was reset. The same phone number can now enrol again.`);
+                }
+
+                const confirmation = String(form.get("confirm_name") ?? "").trim();
+                if (confirmation !== member.name) {
+                        return render(request, env, actor, selectedProject, null, null, `Type ${member.name} exactly to remove this employee.`);
+                }
+                await env.DB.batch([
+                        env.DB.prepare(`
+                                DELETE FROM channel_identities
+                                WHERE tenant_id = ? AND team_member_id = ?
+                        `).bind(actor.tenantId, memberId),
+                        env.DB.prepare(`
+                                DELETE FROM team_member_projects
+                                WHERE team_member_id = ?
+                        `).bind(memberId),
+						env.DB.prepare(`DELETE FROM direct_whatsapp_invites WHERE team_member_id = ?`).bind(memberId),
+                        env.DB.prepare(`
+                                UPDATE team_members
+                                SET active = 0, phone = ?, email = NULL,
+                                        enrolment_status = 'suspended', scheduling_enabled = 0
+                                WHERE id = ? AND tenant_id = ?
+                        `).bind(`removed-${crypto.randomUUID()}`, memberId, actor.tenantId),
+                ]);
+                return render(request, env, actor, selectedProject, null, `${member.name} was removed. Historical stand-up records were preserved.`);
         }
 
         if (action === "create_invite") {

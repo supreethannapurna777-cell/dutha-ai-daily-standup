@@ -79,12 +79,20 @@ export function extractUpdate(
 			.map((sentence) => sentence.trim())
 			.filter(Boolean);
 
-		const taskMatch = text.match(
-			/(?:today\s+i\s+will|i\s+will\s+work\s+on)\s+(.+?)(?:\.|\n|$)/i,
-		);
+		const taskParts: string[] = [];
+		for (const sentence of sentences) {
+			const taskMatch = sentence.match(
+				/^(?:task\s*:\s*|my\s+task\s+(?:for\s+)?today\s+is\s+|today\s+i\s+(?:will|am|plan\s+to|need\s+to)\s+|i\s+(?:will\s+work\s+on|am\s+working\s+on|am\s+verifying|am\s+testing)\s+|working\s+on\s+)(.+?)[.!?]?$/i,
+			);
+			if (!taskMatch) continue;
+			const task = taskMatch[1].trim();
+			if (task && !/^(?:blocked|waiting|unable)\b/i.test(task)) {
+				taskParts.push(task);
+			}
+		}
 
-		if (taskMatch) {
-			tasks = taskMatch[1].trim();
+		if (taskParts.length > 0) {
+			tasks = taskParts.join("; ");
 		}
 
 		const explicitPeopleMatch = text.match(

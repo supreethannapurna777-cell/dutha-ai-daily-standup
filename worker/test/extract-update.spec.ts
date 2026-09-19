@@ -59,12 +59,29 @@ describe("extractUpdate", () => {
 		);
 	});
 
-	it("preserves unstructured replies safely", () => {
+	it("extracts a concise working-on reply", () => {
 		const reply = "Working on documentation.";
 		const result = extractUpdate(reply);
 
-		expect(result.tasks).toBe("Not specified");
+		expect(result.tasks).toBe("documentation");
 		expect(result.original_reply).toBe(reply);
+	});
+
+	it("extracts multiple task statements from the production text format", () => {
+		const reply = "Today I am testing the Dutha production WhatsApp connection. I am verifying the complete message workflow. No blocker. Expected completion is 11 AM.";
+		const result = extractUpdate(reply);
+
+		expect(result.tasks).toBe(
+			"testing the Dutha production WhatsApp connection; the complete message workflow",
+		);
+		expect(result.blockers).toBe("None mentioned");
+		expect(result.expected_completion).toBe("11 AM");
+	});
+
+	it("extracts an explicit task label", () => {
+		expect(extractUpdate(
+			"Task: Validate the Jira return workflow. Blocker: none. Expected completion: today.",
+		).tasks).toBe("Validate the Jira return workflow");
 	});
 
 	it("extracts a natural-language blocker, owner, task and duration", () => {

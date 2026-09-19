@@ -622,7 +622,7 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 
 	try {
 		const storedPhone = phone || `pending-${crypto.randomUUID()}`;
-		const enrolmentStatus = phone ? 'enrolled' : 'invited';
+		const enrolmentStatus = 'invited';
 		const inserted = await env.DB.prepare(
 			`
                                 INSERT INTO team_members (
@@ -649,7 +649,7 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 				projectId,
 				email || null,
 				enrolmentStatus,
-				phone ? 1 : 0,
+				0,
 			)
 			.first<{ id: number }>();
 		if (!inserted) throw new Error('Member was not inserted.');
@@ -661,13 +661,6 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 		)
 			.bind(projectId, inserted.id)
 			.run();
-		if (phone) {
-			await env.DB.prepare(`
-				INSERT INTO channel_identities (
-					tenant_id, team_member_id, channel, external_id, display_name
-				) VALUES (?, ?, 'whatsapp', ?, ?)
-			`).bind(principal.tenantId, inserted.id, phone, name).run();
-		}
 	} catch {
 		return 'The member could not be added. The email or phone number may already exist.';
 	}

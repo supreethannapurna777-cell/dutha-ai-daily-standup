@@ -148,6 +148,122 @@ describe("secure channel enrolment", () => {
                 expect(html).not.toContain("pending-");
         });
 
+		it("connects a directly invited WhatsApp number after YES", async () => {
+				await env.DB.prepare(`
+						UPDATE team_members
+						SET phone = '919900000009', enrolment_status = 'invited'
+						WHERE id = ?
+				`).bind(memberId).run();
+				await env.DB.prepare(`
+						INSERT INTO direct_whatsapp_invites (
+							team_member_id, tenant_id, project_id, expires_at
+						) VALUES (?, 1, 1, '2099-01-01T00:00:00.000Z')
+				`).bind(memberId).run();
+
+				const result = await processWhatsappEnrolment(
+						env.DB,
+						"919900000009",
+						"Sreeja",
+						"wamid.direct.1",
+						"YES",
+				);
+
+				expect(result).toMatchObject({ handled: true, success: true, duplicate: false });
+				expect(result.message).toContain("Welcome Sreeja");
+				expect(await resolveWhatsappIdentity(env.DB, "919900000009"))
+						.toMatchObject({ teamMemberId: memberId });
+				expect(await env.DB.prepare(`
+						SELECT enrolment_status, scheduling_enabled FROM team_members WHERE id = ?
+				`).bind(memberId).first()).toEqual({ enrolment_status: "enrolled", scheduling_enabled: 1 });
+		});
+
+		it("does not connect a stored number before an invitation is sent", async () => {
+				await env.DB.prepare(`
+						UPDATE team_members SET phone = '919900000008', enrolment_status = 'invited'
+						WHERE id = ?
+				`).bind(memberId).run();
+				const result = await processWhatsappEnrolment(
+						env.DB,
+						"919900000008",
+						"Sreeja",
+						"wamid.direct.2",
+						"YES",
+				);
+				expect(result.handled).toBe(false);
+				expect(await resolveWhatsappIdentity(env.DB, "919900000008")).toBeNull();
+		});
+
+        it("resets a WhatsApp connection so the same number can enrol again", async () => {
+                await env.DB.prepare(`
+                        INSERT INTO channel_identities (
+                                tenant_id, team_member_id, channel, external_id, display_name
+                        ) VALUES (1, ?, 'whatsapp', '919900000001', 'Sreeja')
+                `).bind(memberId).run();
+                await env.DB.prepare(`
+                        UPDATE team_members
+                        SET phone = '919900000001', enrolment_status = 'enrolled', scheduling_enabled = 1
+                        WHERE id = ?
+                `).bind(memberId).run();
+
+                const response = await channelManagementResponse(
+                        managementRequest("POST", new URLSearchParams({
+                                action: "reset_whatsapp",
+                                project_id: "1",
+                                member_id: String(memberId),
+                        })),
+                        managementEnv,
+                );
+                expect(response.status).toBe(200);
+                expect(await response.text()).toContain("same phone number can now enrol again");
+                expect(await env.DB.prepare(`
+                        SELECT COUNT(*) AS count FROM channel_identities
+                        WHERE team_member_id = ? AND channel = 'whatsapp'
+                `).bind(memberId).first()).toEqual({ count: 0 });
+                const member = await env.DB.prepare(`
+                        SELECT phone, enrolment_status, scheduling_enabled
+                        FROM team_members WHERE id = ?
+                `).bind(memberId).first<{ phone: string; enrolment_status: string; scheduling_enabled: number }>();
+                expect(member?.phone).toMatch(/^pending-/);
+                expect(member).toMatchObject({ enrolment_status: "invited", scheduling_enabled: 0 });
+        });
+
+        it("soft-removes an employee only after their name is confirmed", async () => {
+                const rejected = await channelManagementResponse(
+                        managementRequest("POST", new URLSearchParams({
+                                action: "remove_member",
+                                project_id: "1",
+                                member_id: String(memberId),
+                                confirm_name: "wrong name",
+                        })),
+                        managementEnv,
+                );
+                expect(rejected.status).toBe(400);
+                expect(await env.DB.prepare("SELECT active FROM team_members WHERE id = ?").bind(memberId).first())
+                        .toEqual({ active: 1 });
+
+                const response = await channelManagementResponse(
+                        managementRequest("POST", new URLSearchParams({
+                                action: "remove_member",
+                                project_id: "1",
+                                member_id: String(memberId),
+                                confirm_name: "Sreeja",
+                        })),
+                        managementEnv,
+                );
+                expect(response.status).toBe(200);
+                expect(await response.text()).toContain("Sreeja was removed");
+                const member = await env.DB.prepare(`
+                        SELECT active, email, enrolment_status, scheduling_enabled
+                        FROM team_members WHERE id = ?
+                `).bind(memberId).first();
+                expect(member).toEqual({
+                        active: 0,
+                        email: null,
+                        enrolment_status: "suspended",
+                        scheduling_enabled: 0,
+                });
+        });
+
         it("creates an invitation and shows its code only in the response", async () => {
                 const response = await channelManagementResponse(
                         managementRequest("POST", new URLSearchParams({

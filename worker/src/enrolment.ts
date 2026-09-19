@@ -83,7 +83,7 @@ export async function resolveWhatsappIdentity(
         const legacy = await db.prepare(`
                 SELECT id, tenant_id, primary_project_id, name
                 FROM team_members
-                WHERE phone = ? AND active = 1 LIMIT 1
+                WHERE phone = ? AND active = 1 AND enrolment_status = 'enrolled' LIMIT 1
         `).bind(senderPhone).first<{
                 id: number;
                 tenant_id: number;
@@ -126,6 +126,75 @@ export async function processChannelEnrolment(
         text: string,
         now = new Date(),
 ): Promise<EnrolmentResult> {
+	const directConfirmation = text.trim().match(/^(yes|confirm|accept)$/i);
+	if (channel === "whatsapp" && directConfirmation) {
+		if (await eventExists(db, messageId)) {
+			return { handled: true, duplicate: true, success: false };
+		}
+		const pending = await db.prepare(`
+			SELECT id, tenant_id, primary_project_id, name
+			FROM team_members AS member
+			WHERE member.phone = ? AND member.active = 1
+				AND member.enrolment_status = 'invited'
+				AND EXISTS (
+					SELECT 1 FROM direct_whatsapp_invites AS invite
+					WHERE invite.team_member_id = member.id
+						AND invite.tenant_id = member.tenant_id
+						AND invite.expires_at > ?
+				)
+			LIMIT 1
+		`).bind(senderExternalId, now.toISOString()).first<{
+			id: number;
+			tenant_id: number;
+			primary_project_id: number;
+			name: string;
+		}>();
+		if (pending) {
+			const owner = await db.prepare(`
+				SELECT team_member_id FROM channel_identities
+				WHERE channel = 'whatsapp' AND external_id = ? LIMIT 1
+			`).bind(senderExternalId).first<{ team_member_id: number }>();
+			if (owner && owner.team_member_id !== pending.id) {
+				return {
+					handled: true,
+					duplicate: false,
+					success: false,
+					message: "This WhatsApp number is already connected. Ask your administrator for help.",
+				};
+			}
+			await db.batch([
+				db.prepare(`
+					INSERT INTO channel_identities (
+						tenant_id, team_member_id, channel, external_id, display_name
+					) VALUES (?, ?, 'whatsapp', ?, ?)
+					ON CONFLICT(team_member_id, channel) DO UPDATE SET
+						external_id = excluded.external_id,
+						display_name = excluded.display_name,
+						verified_at = CURRENT_TIMESTAMP,
+						updated_at = CURRENT_TIMESTAMP
+				`).bind(pending.tenant_id, pending.id, senderExternalId, senderName),
+				db.prepare(`
+					UPDATE team_members
+					SET enrolment_status = 'enrolled', scheduling_enabled = 1
+					WHERE id = ? AND tenant_id = ?
+				`).bind(pending.id, pending.tenant_id),
+				db.prepare(`
+					INSERT INTO channel_identity_events (
+						tenant_id, team_member_id, channel, event_type,
+						external_message_id, details
+					) VALUES (?, ?, 'whatsapp', 'identity_connected', ?, ?)
+				`).bind(pending.tenant_id, pending.id, messageId, `Project ${pending.primary_project_id}; direct invitation`),
+				db.prepare(`DELETE FROM direct_whatsapp_invites WHERE team_member_id = ?`).bind(pending.id),
+			]);
+			return {
+				handled: true,
+				duplicate: false,
+				success: true,
+				message: `Welcome ${pending.name}. Your WhatsApp account is now connected to Dutha.`,
+			};
+		}
+	}
+
         const match = text.trim().match(/^join\s+([A-Z0-9]{8,16})\s+([^\s]+)$/i);
         if (!match) return { handled: false, duplicate: false, success: false };
         if (await eventExists(db, messageId)) {

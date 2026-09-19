@@ -205,7 +205,7 @@ describe("member schedule management", () => {
                                 reminder_1_time: string;
                                 reminder_2_time: string;
                                 active: number;
-                                scheduling_enabled: number;
+							scheduling_enabled: number;
                         }>();
 
                 expect(member).toEqual({
@@ -216,7 +216,7 @@ describe("member schedule management", () => {
                         reminder_1_time: "12:00",
                         reminder_2_time: "15:00",
                         active: 1,
-                        scheduling_enabled: 1,
+						scheduling_enabled: 1,
                 });
         });
 
@@ -286,7 +286,8 @@ describe("member schedule management", () => {
                                         department,
                                         timezone,
                                         initial_time,
-                                        scheduling_enabled
+                                        scheduling_enabled,
+										enrolment_status
                                 FROM team_members
                                 WHERE phone = ?
                                 `,
@@ -297,7 +298,8 @@ describe("member schedule management", () => {
                                 department: string;
                                 timezone: string;
                                 initial_time: string;
-                                scheduling_enabled: number;
+							scheduling_enabled: number;
+							enrolment_status: string;
                         }>();
 
                 expect(stored).toEqual({
@@ -306,8 +308,14 @@ describe("member schedule management", () => {
                                 "AI & ML Engineer",
                         timezone: "Asia/Kolkata",
                         initial_time: "12:00",
-                        scheduling_enabled: 1,
+						scheduling_enabled: 0,
+						enrolment_status: "invited",
                 });
+
+				expect(await env.DB.prepare(`
+						SELECT COUNT(*) AS count FROM channel_identities
+						WHERE team_member_id = (SELECT id FROM team_members WHERE phone = ?)
+				`).bind("919876543210").first()).toEqual({ count: 0 });
 
                 const pageResponse =
                         await memberManagementResponse(
