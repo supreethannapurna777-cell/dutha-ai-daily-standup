@@ -13,6 +13,7 @@
         },
         "vars": {
                 "WHATSAPP_API_VERSION": "v26.0",
+		"WHATSAPP_BUSINESS_NUMBER": "917013298834",
                 "WHATSAPP_TEMPLATE_LANGUAGE": "en_US",
                 "WHATSAPP_INITIAL_TEMPLATE_NAME": "daily_standup_request",
                 "WHATSAPP_REMINDER_TEMPLATE_NAME": "daily_standup_reminder",

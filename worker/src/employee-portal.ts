@@ -149,17 +149,25 @@ async function dashboardResponse(request: Request, env: WorkerEnv, memberId: num
 	const member = await env.DB.prepare(`SELECT id, tenant_id, primary_project_id, name, email, department FROM team_members WHERE id=? AND active=1 LIMIT 1`).bind(memberId).first<{ id:number; tenant_id:number; primary_project_id:number; name:string; email:string|null; department:string }>();
 	if (!member) return new Response('Employee account not found.', { status: 404 });
 	const identity = await env.DB.prepare(`SELECT external_id FROM channel_identities WHERE team_member_id=? AND channel='whatsapp' LIMIT 1`).bind(memberId).first();
-	let enrolment = '';
 	if (request.method === 'POST') {
 		if (!sameOrigin(request)) return new Response('Invalid request origin.', { status: 403 });
 		const form = await request.formData();
 		if (String(form.get('action')) === 'connect_whatsapp' && member.email) {
+			const businessNumber = (env.WHATSAPP_BUSINESS_NUMBER ?? '').replace(/\D/g, '');
+			if (!businessNumber) return new Response('WhatsApp connection is not configured.', { status: 503 });
 			const code = generateEnrolmentCode();
 			await env.DB.prepare(`INSERT INTO enrolment_invites (tenant_id, project_id, created_by_management_user_id, code_hash, expires_at, max_uses) VALUES (?, ?, 1, ?, ?, 1)`).bind(member.tenant_id, member.primary_project_id, await hashEnrolmentCode(code), new Date(Date.now()+30*60*1000).toISOString()).run();
-			enrolment = `<div class="success"><strong>Open WhatsApp and send this exact message to Dutha within 30 minutes:</strong><code>JOIN ${escapeHtml(code)} ${escapeHtml(member.email)}</code><p>The number that sends this message becomes your verified WhatsApp channel.</p></div>`;
+			const message = `JOIN ${code} ${member.email}`;
+			return new Response(null, {
+				status: 303,
+				headers: {
+					Location: `https://wa.me/${businessNumber}?text=${encodeURIComponent(message)}`,
+					'Cache-Control': 'no-store',
+				},
+			});
 		}
 	}
-	return page('Employee dashboard', `<div class="top"><div><h1>Hello, ${escapeHtml(member.name)}</h1><p class="muted">${escapeHtml(member.department)}</p></div><form class="inline" method="post" action="/employee/logout"><button class="secondary">Sign out</button></form></div>${enrolment}<section class="card"><h2>Communication channels</h2><p class="muted">Choose how Dutha should send your reminders, confirmations and Jira results.</p><div class="grid"><article class="channel ready"><span class="badge green">${identity ? 'Connected' : 'Available'}</span><h2>WhatsApp</h2><p>Text and voice stand-ups, reminders and confirmations.</p>${identity ? '<p><strong>Your WhatsApp channel is verified.</strong></p>' : '<form method="post"><input type="hidden" name="action" value="connect_whatsapp"><button>Connect WhatsApp</button></form>'}</article><article class="channel soon"><span class="badge">Coming soon</span><h2>Microsoft Teams</h2><p>Receive and reply inside Teams.</p></article><article class="channel soon"><span class="badge">Coming soon</span><h2>Slack</h2><p>Stand-ups and actions from Slack.</p></article><article class="channel soon"><span class="badge">Coming soon</span><h2>Email</h2><p>Notifications and activity summaries.</p></article></div></section>`);
+	return page('Employee dashboard', `<div class="top"><div><h1>Hello, ${escapeHtml(member.name)}</h1><p class="muted">${escapeHtml(member.department)}</p></div><form class="inline" method="post" action="/employee/logout"><button class="secondary">Sign out</button></form></div><section class="card"><h2>Communication channels</h2><p class="muted">Choose how Dutha should send your reminders, confirmations and Jira results.</p><div class="grid"><article class="channel ready"><span class="badge green">${identity ? 'Connected' : 'Available'}</span><h2>WhatsApp</h2><p>Text and voice stand-ups, reminders and confirmations.</p>${identity ? '<p><strong>Your WhatsApp channel is verified.</strong></p>' : '<form method="post"><input type="hidden" name="action" value="connect_whatsapp"><button>Connect WhatsApp</button></form>'}</article><article class="channel soon"><span class="badge">Coming soon</span><h2>Microsoft Teams</h2><p>Receive and reply inside Teams.</p></article><article class="channel soon"><span class="badge">Coming soon</span><h2>Slack</h2><p>Stand-ups and actions from Slack.</p></article><article class="channel soon"><span class="badge">Coming soon</span><h2>Email</h2><p>Notifications and activity summaries.</p></article></div></section>`);
 }
 
 export async function employeePortalResponse(request: Request, env: WorkerEnv): Promise<Response> {
