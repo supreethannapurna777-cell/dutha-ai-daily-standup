@@ -3,7 +3,8 @@ import { generateEnrolmentCode, hashEnrolmentCode } from './enrolment';
 
 const COOKIE_NAME = 'dutha_employee_session';
 const SESSION_SECONDS = 8 * 60 * 60;
-const PASSWORD_ITERATIONS = 120_000;
+// Cloudflare Workers Web Crypto supports PBKDF2 up to 100,000 iterations.
+const PASSWORD_ITERATIONS = 100_000;
 
 function escapeHtml(value: unknown): string {
 	return String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#039;');
