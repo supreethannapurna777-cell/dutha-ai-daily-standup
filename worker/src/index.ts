@@ -51,6 +51,7 @@ import {
 import { teamsWebhookResponse } from "./teams";
 import { recoverIntegrationPipeline } from "./pipeline-reliability";
 import { deploymentPreflightResponse } from "./deployment-preflight";
+import { employeePortalResponse } from "./employee-portal";
 
 export type { WorkerEnv } from "./env";
 
@@ -301,6 +302,10 @@ export default {
                                 return new Response("Method not allowed", { status: 405 });
                         }
                         return logoutResponse();
+                }
+
+                if (url.pathname === "/employee" || url.pathname.startsWith("/employee/")) {
+                        return employeePortalResponse(request, env);
                 }
 
                 let managementRequest = request;

@@ -332,6 +332,30 @@ describe("member schedule management", () => {
                 );
         });
 
+        it("creates a single-use employee activation link for an emailed member", async () => {
+                const body = new URLSearchParams({
+                        action: "add",
+                        name: "Activation User",
+                        department: "DevOps",
+                        email: "activation@example.com",
+                        timezone: "Asia/Kolkata",
+                });
+                const response = await memberManagementResponse(
+                        authorisedRequest("POST", body),
+                        managementEnv,
+                );
+                expect(response.status).toBe(303);
+                expect(response.headers.get("Location")).toContain("activation=");
+                const account = await env.DB.prepare(`
+                        SELECT account.email, token.expires_at
+                        FROM employee_accounts AS account
+                        INNER JOIN employee_activation_tokens AS token
+                                ON token.team_member_id = account.team_member_id
+                        WHERE account.email = ? AND token.used_at IS NULL
+                `).bind("activation@example.com").first();
+                expect(account).not.toBeNull();
+        });
+
         it("accepts same-origin changes without an Origin header", async () => {
                 const response =
                         await memberManagementResponse(

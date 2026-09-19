@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './env';
 import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
+import { createEmployeeActivation } from './employee-portal';
 
 interface ManagedMember {
 	id: number;
@@ -277,7 +278,7 @@ function memberCard(member: ManagedMember): string {
         `;
 }
 
-function page(members: ManagedMember[], message: string | null, error: string | null): string {
+function page(members: ManagedMember[], message: string | null, error: string | null, activationLink: string | null = null): string {
 	const cards = members.length ? members.map(memberCard).join('') : `<p class="empty">No members configured.</p>`;
 
 	return `<!DOCTYPE html>
@@ -484,6 +485,8 @@ function page(members: ManagedMember[], message: string | null, error: string | 
 
                 ${message ? `<div class="notice">${escapeHtml(message)}</div>` : ''}
 
+                ${activationLink ? `<div class="notice"><strong>Employee activation link (valid for 24 hours)</strong><p>Send this private, single-use link to the employee's work email:</p><input value="${escapeHtml(activationLink)}" readonly aria-label="Employee activation link"></div>` : ''}
+
                 ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
                 <form method="post" class="add-card">
@@ -583,14 +586,23 @@ async function renderManagementPage(
 
 	const members = await getMembers(env.DB, principal.tenantId, projectId);
 	const updated = new URL(request.url).searchParams.get('updated');
+	const activationToken = new URL(request.url).searchParams.get('activation');
+	const activationLink = activationToken
+		? `${new URL(request.url).origin}/employee/activate?token=${encodeURIComponent(activationToken)}`
+		: null;
 
 	const message =
 		updated === 'member' ? 'Member schedule updated successfully.' : updated === 'added' ? 'Team member added successfully.' : null;
 
-	return htmlResponse(page(members, message, error), error ? 400 : 200);
+	return htmlResponse(page(members, message, error, activationLink), error ? 400 : 200);
 }
 
-async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number): Promise<string | null> {
+interface AddMemberResult {
+	error: string | null;
+	activationToken?: string;
+}
+
+async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number): Promise<AddMemberResult> {
 	const name = String(form.get('name') ?? '').trim();
 
 	const department = String(form.get('department') ?? '').trim();
@@ -601,23 +613,23 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 	const timezone = String(form.get('timezone') ?? '');
 
 	if (!name || name.length > 80 || !department || department.length > 100) {
-		return 'Enter a valid name and department.';
+		return { error: 'Enter a valid name and department.' };
 	}
 
 	if (phone && !validPhone(phone)) {
-		return 'Enter a valid WhatsApp number with country code or leave it blank.';
+		return { error: 'Enter a valid WhatsApp number with country code or leave it blank.' };
 	}
 
 	if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-		return 'Enter a valid work email.';
+		return { error: 'Enter a valid work email.' };
 	}
 
 	if (!phone && !email) {
-		return 'Enter a work email or WhatsApp number.';
+		return { error: 'Enter a work email or WhatsApp number.' };
 	}
 
 	if (!allowedTimezones.has(timezone)) {
-		return 'Select a supported timezone.';
+		return { error: 'Select a supported timezone.' };
 	}
 
 	try {
@@ -661,11 +673,13 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 		)
 			.bind(projectId, inserted.id)
 			.run();
+		const activationToken = email
+			? await createEmployeeActivation(env.DB, inserted.id, principal.tenantId, email)
+			: undefined;
+		return { error: null, activationToken };
 	} catch {
-		return 'The member could not be added. The email or phone number may already exist.';
+		return { error: 'The member could not be added. The email or phone number may already exist.' };
 	}
-
-	return null;
 }
 
 async function updateMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number): Promise<string | null> {
@@ -796,8 +810,18 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 	let redirectValue: string;
 
 	if (action === 'add') {
-		error = await addMember(form, env, principal, projectId);
+		const result = await addMember(form, env, principal, projectId);
+		error = result.error;
 		redirectValue = 'added';
+		if (!error && result.activationToken) {
+			return new Response(null, {
+				status: 303,
+				headers: {
+					Location: `/dashboard/members?updated=added&activation=${encodeURIComponent(result.activationToken)}`,
+					'Cache-Control': 'no-store',
+				},
+			});
+		}
 	} else if (action === 'update') {
 		error = await updateMember(form, env, principal, projectId);
 		redirectValue = 'member';
