@@ -84,6 +84,7 @@ describe('employee portal', () => {
 		const dashboard = await employeePortalResponse(new Request('https://example.com/employee', { headers: { Cookie: cookie } }), portalEnv);
 		const html = await dashboard.text();
 		expect(html).toContain('Connect WhatsApp');
+		expect(html).toContain('<form method="post" target="_blank">');
 		expect(html).toContain('Microsoft Teams');
 		expect(html).toContain('Slack');
 		expect(html.match(/Coming soon/g)?.length).toBeGreaterThanOrEqual(3);
