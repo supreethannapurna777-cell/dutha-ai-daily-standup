@@ -3,6 +3,7 @@ import {
         type ManagementPrincipal,
 } from "./access-control";
 import type { WorkerEnv } from "./env";
+import { createManagerActivation } from "./auth";
 
 interface ProjectRow {
         id: number;
@@ -167,12 +168,14 @@ function page(
         members: MemberRow[],
         message: string | null,
         error: string | null,
+	activationUrl: string | null = null,
 ): string {
 	const teams = teamGroups(members);
 	const cards = projects.map((project) => {
                 const managerRows = managers.map((manager) => `
                         <tr><td>${escapeHtml(manager.display_name)}<small>${escapeHtml(manager.tenant_role)}</small></td>
-                        <td>${assignmentForm("manager", project.id, "management_user_id", manager.id, assigned(manager.project_ids, project.id))}</td></tr>
+                        <td>${assignmentForm("manager", project.id, "management_user_id", manager.id, assigned(manager.project_ids, project.id))}
+			${manager.email ? `<form method="post" class="inline"><input type="hidden" name="action" value="manager_activation"><input type="hidden" name="management_user_id" value="${manager.id}"><button type="submit">Activation link</button></form>` : ''}</td></tr>
                 `).join("");
 		const memberRows = members.map((member) => `
                         <tr><td>${escapeHtml(member.name)}<small>${escapeHtml(member.department)}</small></td>
@@ -203,9 +206,9 @@ function page(
 <title>Projects and access · Dutha WorkOps</title><style>
 :root{font-family:Inter,Arial,sans-serif;color:#172033;background:#f4f7fb}*{box-sizing:border-box}body{margin:0;padding:30px}main{max-width:1250px;margin:auto}header{display:flex;justify-content:space-between;gap:20px;align-items:start;margin-bottom:22px}h1,h2,h3{color:#173f6b}h1{margin:0 0 6px}.muted,small{display:block;color:#64748b}.top{color:#1769aa;font-weight:700}.notice,.error{padding:13px;border-radius:9px;margin:14px 0}.notice{background:#dcfce7;color:#166534}.error{background:#fee2e2;color:#991b1b}.create,.project{background:#fff;border-radius:13px;box-shadow:0 3px 14px #0f172a12;padding:21px;margin-bottom:20px}.create-grid{display:grid;grid-template-columns:1fr 2fr auto;gap:12px;align-items:end}label{display:grid;gap:6px;font-weight:700}input,select{padding:10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit}button,.button{border:0;border-radius:8px;padding:10px 14px;color:#fff;background:#1769aa;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block}.project-head,.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.project-head h2,.section-head h3{margin:5px 0}.key,.status{font-size:12px;font-weight:800}.key{color:#1769aa}.status{color:#166534;background:#dcfce7;padding:6px 9px;border-radius:99px}.columns{display:grid;grid-template-columns:1fr 1fr;gap:24px}table{width:100%;border-collapse:collapse}td{padding:9px;border-bottom:1px solid #e5e7eb}.inline{text-align:right}.assign{background:#15803d}.remove{background:#b91c1c;padding:7px 10px}.complete{color:#166534;background:#dcfce7;border-radius:99px;padding:6px 9px;font-size:12px;font-weight:800}.member-heading{margin-top:24px}.manager-form{margin-top:18px;border-top:1px solid #e5e7eb;padding-top:18px}.manager-grid{display:grid;grid-template-columns:1.3fr 1.5fr 1fr auto;gap:10px;align-items:end}.modal{display:none;position:fixed;inset:0;background:#0f172abf;z-index:10;padding:20px;align-items:center;justify-content:center}.modal:target{display:flex}.modal-card{width:min(500px,100%);background:#fff;border-radius:13px;padding:24px;box-shadow:0 20px 60px #0005}.modal-card h3{margin-top:0}.modal-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:20px}.cancel{color:#475569;font-weight:700;text-decoration:none}@media(max-width:800px){body{padding:15px}.columns,.create-grid,.manager-grid{grid-template-columns:1fr}header{flex-direction:column}.section-head{align-items:flex-start;flex-direction:column}}
 </style></head><body><main><header><div><h1>Projects and access</h1><div class="muted">Create projects and control who can see each one.</div></div><a class="top" href="/dashboard">Return to dashboard</a></header>
-${message ? `<div class="notice">${escapeHtml(message)}</div>` : ""}${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
+${message ? `<div class="notice">${escapeHtml(message)}</div>` : ""}${activationUrl ? `<div class="notice"><strong>Secure activation link (valid for 24 hours):</strong><code>${escapeHtml(activationUrl)}</code><p>Send this privately to the manager. Creating another link revokes this one.</p></div>` : ''}${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
 <section class="create"><h2>Create project</h2><form method="post" class="create-grid"><input type="hidden" name="action" value="create_project"><label>Project key<input name="project_key" maxlength="20" placeholder="CLIENT-OPS" required></label><label>Project name<input name="name" maxlength="100" required></label><button type="submit">Create project</button></form>
-<form method="post" class="manager-form"><input type="hidden" name="action" value="create_manager"><h2>Add management user</h2><div class="manager-grid"><label>Name<input name="display_name" maxlength="100" required></label><label>Email<input name="email" type="email" maxlength="254"></label><label>Role<select name="tenant_role"><option value="project_manager">Project manager</option><option value="portfolio_leader">Portfolio leader</option><option value="admin">Administrator</option></select></label><button type="submit">Add user</button></div></form></section>
+<form method="post" class="manager-form"><input type="hidden" name="action" value="create_manager"><h2>Add management user</h2><div class="manager-grid"><label>Name<input name="display_name" maxlength="100" required></label><label>Work email<input name="email" type="email" maxlength="254" required></label><label>Role<select name="tenant_role"><option value="project_manager">Project manager</option><option value="portfolio_leader">Portfolio leader</option><option value="admin">Administrator</option></select></label><button type="submit">Add user</button></div></form></section>
 ${cards || '<section class="project">No projects configured.</section>'}</main></body></html>`;
 }
 
@@ -332,10 +335,41 @@ async function render(
         env: WorkerEnv,
         actor: ManagementPrincipal,
         error: string | null = null,
+	activationUrl: string | null = null,
 ): Promise<Response> {
         const rows = await data(env.DB, actor.tenantId);
         const updated = new URL(request.url).searchParams.get("updated");
-        return response(page(rows.projects, rows.managers, rows.members, updated ? "Projects and access updated." : null, error), error ? 400 : 200);
+        return response(page(rows.projects, rows.managers, rows.members, updated ? "Projects and access updated." : null, error, activationUrl), error ? 400 : 200);
+}
+
+async function managerActivation(
+	form: FormData,
+	request: Request,
+	env: WorkerEnv,
+	actor: ManagementPrincipal,
+): Promise<Response> {
+	const action = String(form.get("action") ?? "");
+	let managerId: number;
+	if (action === "create_manager") {
+		const displayName = String(form.get("display_name") ?? "").trim();
+		const email = String(form.get("email") ?? "").trim().toLowerCase();
+		const role = String(form.get("tenant_role") ?? "");
+		if (!displayName || displayName.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["admin", "portfolio_leader", "project_manager"].includes(role)) return render(request, env, actor, "Enter a valid name, work email and role.");
+		try {
+			const created = await env.DB.prepare(`INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role) VALUES (?, ?, ?, ?, ?) RETURNING id`).bind(actor.tenantId, email, displayName, email, role).first<{ id:number }>();
+			if (!created) return render(request, env, actor, "Management user could not be created.");
+			managerId = created.id;
+		} catch {
+			return render(request, env, actor, "That management user already exists.");
+		}
+	} else {
+		managerId = Number(form.get("management_user_id"));
+		const manager = Number.isSafeInteger(managerId) ? await env.DB.prepare(`SELECT email FROM management_users WHERE id=? AND tenant_id=? AND active=1 LIMIT 1`).bind(managerId, actor.tenantId).first<{ email:string|null }>() : null;
+		if (!manager?.email) return render(request, env, actor, "Management user with a work email was not found.");
+	}
+	const token = await createManagerActivation(env.DB, managerId);
+	const activationUrl = `${new URL(request.url).origin}/manager/activate?token=${encodeURIComponent(token)}`;
+	return render(request, env, actor, null, activationUrl);
 }
 
 export async function projectManagementResponse(
@@ -348,7 +382,9 @@ export async function projectManagementResponse(
         if (request.method === "GET") return render(request, env, actor);
         if (request.method !== "POST") return new Response("Method not allowed.", { status: 405, headers: { Allow: "GET, POST" } });
         if (!sameOrigin(request)) return new Response("Invalid request origin.", { status: 403 });
-        const error = await mutate(await request.formData(), env, actor);
+	const form = await request.formData();
+	if (["create_manager", "manager_activation"].includes(String(form.get("action") ?? ""))) return managerActivation(form, request, env, actor);
+        const error = await mutate(form, env, actor);
         if (error) return render(request, env, actor, error);
         return new Response(null, { status: 303, headers: { Location: "/dashboard/projects?updated=1" } });
 }

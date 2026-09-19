@@ -70,6 +70,20 @@ describe("project and access management", () => {
                 });
         });
 
+	it("creates a management user and displays a single-use activation link", async () => {
+		const response = await projectManagementResponse(
+			request("POST", new URLSearchParams({ action: "create_manager", display_name: "Pilot Manager", email: "pilot.manager@example.com", tenant_role: "project_manager" }).toString()),
+			testEnv,
+		);
+		const html = await response.text();
+		expect(response.status).toBe(200);
+		expect(html).toContain("Secure activation link");
+		expect(html).toContain("https://example.com/manager/activate?token=");
+		const manager = await env.DB.prepare(`SELECT id FROM management_users WHERE email='pilot.manager@example.com'`).first<{ id:number }>();
+		const invite = manager ? await env.DB.prepare(`SELECT expires_at FROM management_activation_tokens WHERE management_user_id=? AND revoked_at IS NULL`).bind(manager.id).first() : null;
+		expect(invite).toBeTruthy();
+	});
+
         it("rejects a project manager from the administrator page", async () => {
                 const response = await projectManagementResponse(
                         request("GET", undefined, {
