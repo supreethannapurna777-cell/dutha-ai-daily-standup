@@ -211,6 +211,7 @@ describe("secure timezone-aware dashboard", () => {
                         "Awaiting employee confirmation",
                 );
                 expect(html).toContain("Setup");
+                expect(html).toContain("Manage project");
                 expect(html).toContain(
                         "Asia/Kolkata",
                 );

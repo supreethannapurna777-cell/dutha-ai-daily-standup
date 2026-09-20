@@ -12,6 +12,7 @@ import {
         getIstDate,
         getLocalScheduleDetails,
         isIstWeekday,
+        runProjectInitialNow,
         runScheduledAction,
 } from "../src/scheduler";
 
@@ -295,6 +296,23 @@ describe("timezone-aware scheduled automation", () => {
 
                 expect(result.selected).toBe(0);
                 expect(fetcher).not.toHaveBeenCalled();
+        });
+
+        it("manually sends once per member local date", async () => {
+                await insertMember("Supreeth", "919100000000");
+                await insertMember("Paused Member", "919200000000", { schedulingEnabled: 0 });
+                const fetcher = successfulFetcher();
+
+                const first = await runProjectInitialNow(
+                        schedulerEnv("true"), 1, 1, indiaInitialTime, fetcher,
+                );
+                const second = await runProjectInitialNow(
+                        schedulerEnv("true"), 1, 1, indiaInitialTime, fetcher,
+                );
+
+                expect(first).toEqual({ selected: 1, sent: 1, skipped: 0, failed: 0 });
+                expect(second).toEqual({ selected: 1, sent: 0, skipped: 1, failed: 0 });
+                expect(fetcher).toHaveBeenCalledTimes(1);
         });
 
         it("reminds only members who have not replied locally today", async () => {

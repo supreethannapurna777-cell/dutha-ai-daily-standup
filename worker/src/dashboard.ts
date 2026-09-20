@@ -641,12 +641,14 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                         </div>
 
                         <nav class="navigation">
-                                <form method="get" action="/dashboard">
+                                ${projects.length > 1 ? `<form method="get" action="/dashboard">
                                         <select name="project" aria-label="Select project">
                                                 ${projectOptions}
                                         </select>
                                         <button type="submit">Open project</button>
-                                </form>
+                                </form>` : ''}
+
+                                <a href="/dashboard/members?project=${requestedProject}">Manage project</a>
 
                                 <a
                                         class="cases"

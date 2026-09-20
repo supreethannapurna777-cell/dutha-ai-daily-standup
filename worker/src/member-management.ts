@@ -1,6 +1,7 @@
 import type { WorkerEnv } from './env';
 import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
 import { createEmployeeActivation } from './employee-portal';
+import { runProjectInitialNow } from './scheduler';
 
 interface ManagedMember {
 	id: number;
@@ -278,7 +279,7 @@ function memberCard(member: ManagedMember): string {
         `;
 }
 
-function page(members: ManagedMember[], message: string | null, error: string | null, activationLink: string | null = null): string {
+function page(members: ManagedMember[], message: string | null, error: string | null, activationLink: string | null = null, projectId = 1): string {
 	const cards = members.length ? members.map(memberCard).join('') : `<p class="empty">No members configured.</p>`;
 
 	return `<!DOCTYPE html>
@@ -478,7 +479,7 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                                         and automation.
                                 </p>
                         </div>
-                        <a href="/dashboard">
+                        <a href="/dashboard?project=${projectId}">
                                 Return to dashboard
                         </a>
                 </header>
@@ -488,6 +489,19 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                 ${activationLink ? `<div class="notice"><strong>Employee activation link (valid for 24 hours)</strong><p>Send this private, single-use link to the employee's work email:</p><input value="${escapeHtml(activationLink)}" readonly aria-label="Employee activation link"></div>` : ''}
 
                 ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
+
+                <section class="add-card">
+                        <h2>Project stand-up</h2>
+                        <p>Send today's request to active employees whose automated messages are enabled. Anyone already sent an initial request today is skipped.</p>
+                        <details>
+                                <summary>Send stand-up now</summary>
+                                <form method="post">
+                                        <input type="hidden" name="action" value="send_now">
+                                        <p>This sends a real WhatsApp template message.</p>
+                                        <button type="submit">Confirm and send now</button>
+                                </form>
+                        </details>
+                </section>
 
                 <form method="post" class="add-card">
                         <input
@@ -585,16 +599,22 @@ async function renderManagementPage(
 	}
 
 	const members = await getMembers(env.DB, principal.tenantId, projectId);
-	const updated = new URL(request.url).searchParams.get('updated');
-	const activationToken = new URL(request.url).searchParams.get('activation');
+	const params = new URL(request.url).searchParams;
+	const updated = params.get('updated');
+	const activationToken = params.get('activation');
 	const activationLink = activationToken
 		? `${new URL(request.url).origin}/employee/activate?token=${encodeURIComponent(activationToken)}`
 		: null;
 
-	const message =
-		updated === 'member' ? 'Member schedule updated successfully.' : updated === 'added' ? 'Team member added successfully.' : null;
+	const message = updated === 'member'
+		? 'Member schedule updated successfully.'
+		: updated === 'added'
+			? 'Team member added successfully.'
+			: updated === 'sent'
+				? `Stand-up request completed: ${params.get('sent') ?? '0'} sent, ${params.get('skipped') ?? '0'} already sent today, ${params.get('failed') ?? '0'} failed.`
+				: null;
 
-	return htmlResponse(page(members, message, error, activationLink), error ? 400 : 200);
+	return htmlResponse(page(members, message, error, activationLink, projectId), error ? 400 : 200);
 }
 
 interface AddMemberResult {
@@ -817,7 +837,7 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 			return new Response(null, {
 				status: 303,
 				headers: {
-					Location: `/dashboard/members?updated=added&activation=${encodeURIComponent(result.activationToken)}`,
+					Location: `/dashboard/members?project=${projectId}&updated=added&activation=${encodeURIComponent(result.activationToken)}`,
 					'Cache-Control': 'no-store',
 				},
 			});
@@ -825,6 +845,19 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 	} else if (action === 'update') {
 		error = await updateMember(form, env, principal, projectId);
 		redirectValue = 'member';
+	} else if (action === 'send_now') {
+		if (env.AUTOMATION_ENABLED !== 'true') {
+			error = 'Automation is globally paused. No messages were sent.';
+			redirectValue = '';
+		} else {
+			const result = await runProjectInitialNow(env, principal.tenantId, projectId);
+			return new Response(null, {
+				status: 303,
+				headers: {
+					Location: `/dashboard/members?project=${projectId}&updated=sent&sent=${result.sent}&skipped=${result.skipped}&failed=${result.failed}`,
+				},
+			});
+		}
 	} else {
 		error = 'Invalid management action.';
 		redirectValue = '';
@@ -837,7 +870,7 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 	return new Response(null, {
 		status: 303,
 		headers: {
-			Location: `/dashboard/members?updated=${redirectValue}`,
+			Location: `/dashboard/members?project=${projectId}&updated=${redirectValue}`,
 		},
 	});
 }

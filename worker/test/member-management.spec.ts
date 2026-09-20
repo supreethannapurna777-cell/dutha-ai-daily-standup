@@ -179,7 +179,7 @@ describe("member schedule management", () => {
                 expect(
                         response.headers.get("Location"),
                 ).toBe(
-                        "/dashboard/members?updated=member",
+                        "/dashboard/members?project=1&updated=member",
                 );
 
                 const member = await env.DB
@@ -275,7 +275,7 @@ describe("member schedule management", () => {
                 expect(
                         response.headers.get("Location"),
                 ).toBe(
-                        "/dashboard/members?updated=added",
+                        "/dashboard/members?project=1&updated=added",
                 );
 
                 const stored = await env.DB

@@ -36,6 +36,13 @@ export interface ScheduleResult {
         failed: number;
 }
 
+export interface ManualStandupResult {
+        selected: number;
+        sent: number;
+        skipped: number;
+        failed: number;
+}
+
 
 const SCHEDULER_CRON = "*/15 * * * *";
 
@@ -396,4 +403,62 @@ export async function runScheduledAction(
                 sent,
                 failed,
         };
+}
+
+export async function runProjectInitialNow(
+        env: WorkerEnv,
+        tenantId: number,
+        projectId: number,
+        scheduledTime = Date.now(),
+        fetcher: Fetcher = fetch,
+): Promise<ManualStandupResult> {
+        const result = await env.DB.prepare(`
+                SELECT member.id, member.name, member.phone, member.department,
+                        member.timezone, member.working_days, member.initial_time,
+                        member.reminder_1_time, member.reminder_2_time
+                FROM team_members AS member
+                WHERE member.tenant_id = ?
+                        AND member.active = 1
+                        AND member.scheduling_enabled = 1
+                        AND member.phone NOT LIKE 'pending-%'
+                        AND (
+                                member.primary_project_id = ?
+                                OR EXISTS (
+                                        SELECT 1 FROM team_member_projects AS membership
+                                        WHERE membership.team_member_id = member.id
+                                                AND membership.project_id = ?
+                                )
+                        )
+                ORDER BY member.name
+        `).bind(tenantId, projectId, projectId).all<ScheduledTeamMember>();
+
+        const members = result.results;
+        let sent = 0;
+        let skipped = 0;
+        let failed = 0;
+        const sentAt = new Date(scheduledTime).toISOString();
+
+        for (const member of members) {
+                let localDate: string;
+                try {
+                        localDate = getLocalScheduleDetails(scheduledTime, member.timezone).date;
+                } catch {
+                        failed += 1;
+                        continue;
+                }
+
+                if (await wasAlreadySent(env.DB, member.id, "initial", localDate)) {
+                        skipped += 1;
+                        continue;
+                }
+
+                const sendResult = await sendInitialRequest(env, member, fetcher);
+                sendResult.success ? sent += 1 : failed += 1;
+                await recordSendAttempt(
+                        env, member, "initial", localDate, sentAt,
+                        sendResult.success, sendResult.messageId, sendResult.error,
+                );
+        }
+
+        return { selected: members.length, sent, skipped, failed };
 }
