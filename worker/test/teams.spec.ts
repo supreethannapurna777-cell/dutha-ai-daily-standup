@@ -72,7 +72,7 @@ describe("Microsoft Teams adapter", () => {
 
         it("self-enrols a project member and stores a proactive conversation reference", async () => {
                 const codeHash = await hashEnrolmentCode("ABCDEFGH23");
-                await env.DB.prepare(`INSERT INTO enrolment_invites (tenant_id, project_id, created_by_management_user_id, code_hash, expires_at) VALUES (1, 1, 1, ?, '2026-09-20T00:00:00.000Z')`).bind(codeHash).run();
+                await env.DB.prepare(`INSERT INTO enrolment_invites (tenant_id, project_id, created_by_management_user_id, code_hash, expires_at) VALUES (1, 1, 1, ?, '2099-01-01T00:00:00.000Z')`).bind(codeHash).run();
                 const fetcher = connectorFetcher();
                 const response = await teamsWebhookResponse(
                         inbound("JOIN ABCDEFGH23 sreeja@example.com"), teamsEnv, fetcher, async () => true,
