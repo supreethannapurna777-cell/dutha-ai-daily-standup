@@ -475,7 +475,73 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
         `;
 }
 
-function page(cases: CaseRow[], members: MemberOption[], message: string | null, error: string | null): string {
+interface CaseFilters {
+	quick: string;
+	search: string;
+	requester: string;
+	owner: string;
+	status: string;
+	priority: string;
+	type: string;
+	resolution: string;
+	age: string;
+	sla: string;
+	duration: string;
+	sort: string;
+}
+
+const closedStatuses = new Set(['resolved', 'rejected', 'cancelled']);
+
+function caseAgeDays(coordinationCase: CaseRow, now = Date.now()): number {
+	const requested = new Date(coordinationCase.requested_at).getTime();
+	return Number.isNaN(requested) ? 0 : Math.max(0, Math.floor((now - requested) / 86_400_000));
+}
+
+function readFilters(url: URL): CaseFilters {
+	const value = (name: string) => (url.searchParams.get(name) ?? '').trim();
+	return {
+		quick: value('quick'), search: value('search'), requester: value('requester'), owner: value('owner'),
+		status: value('status'), priority: value('priority'), type: value('type'),
+		resolution: value('resolution'), age: value('age'), sla: value('sla'),
+		duration: value('duration'), sort: value('sort') || 'priority',
+	};
+}
+
+function filteredCases(cases: CaseRow[], filters: CaseFilters): CaseRow[] {
+	const now = Date.now();
+	const filtered = cases.filter((item) => {
+		const age = caseAgeDays(item, now);
+		const overdue = Boolean(item.sla_due_at && new Date(item.sla_due_at).getTime() < now && !closedStatuses.has(item.status));
+		const query = filters.search.toLowerCase();
+		return (!query || `${item.id} ${item.issue_summary} ${item.requester_name} ${item.responsible_name ?? ''}`.toLowerCase().includes(query))
+			&& (!filters.quick || (filters.quick === 'open' ? !closedStatuses.has(item.status) : filters.quick === 'unassigned' ? item.responsible_member_id === null && !closedStatuses.has(item.status) : filters.quick === 'overdue' ? overdue : filters.quick === 'awaiting_verification' ? item.resolution_state === 'awaiting_verification' : item.status === 'resolved' || item.resolution_state === 'resolved'))
+			&& (!filters.requester || String(item.requester_member_id) === filters.requester)
+			&& (!filters.owner || (filters.owner === 'unassigned' ? item.responsible_member_id === null : String(item.responsible_member_id) === filters.owner))
+			&& (!filters.status || item.status === filters.status)
+			&& (!filters.priority || item.priority === filters.priority)
+			&& (!filters.type || item.case_type === filters.type)
+			&& (!filters.resolution || item.resolution_state === filters.resolution)
+			&& (!filters.duration || String(item.meeting_duration_minutes) === filters.duration)
+			&& (!filters.age || (filters.age === 'today' ? age === 0 : filters.age === '7' ? age <= 7 : filters.age === '30' ? age <= 30 : age > 30))
+			&& (!filters.sla || (filters.sla === 'overdue' ? overdue : filters.sla === 'due_soon' ? Boolean(item.sla_due_at && !overdue && new Date(item.sla_due_at).getTime() - now <= 86_400_000) : !overdue));
+	});
+	return filtered.sort((a, b) => {
+		if (filters.sort === 'oldest') return new Date(a.requested_at).getTime() - new Date(b.requested_at).getTime();
+		if (filters.sort === 'newest') return new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime();
+		if (filters.sort === 'sla') return (a.sla_due_at ? new Date(a.sla_due_at).getTime() : Infinity) - (b.sla_due_at ? new Date(b.sla_due_at).getTime() : Infinity);
+		const rank: Record<string, number> = { critical: 0, high: 1, normal: 2, low: 3 };
+		return (rank[a.priority] ?? 4) - (rank[b.priority] ?? 4);
+	});
+}
+
+function selectOptions(values: Array<[string, string]>, selected: string): string {
+	return [`<option value="">All</option>`, ...values.map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`)].join('');
+}
+
+function page(cases: CaseRow[], members: MemberOption[], message: string | null, error: string | null, requestUrl: URL, projectId: number): string {
+	const view = requestUrl.searchParams.get('view') === 'overview' ? 'overview' : 'cases';
+	const filters = readFilters(requestUrl);
+	const visibleCases = filteredCases(cases, filters);
 	const openCount = cases.filter((coordinationCase) => !['resolved', 'rejected', 'cancelled'].includes(coordinationCase.status)).length;
 
 	const pendingCount = cases.filter((coordinationCase) =>
@@ -486,14 +552,44 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
 		(coordinationCase) =>
 			coordinationCase.priority === 'critical' && !['resolved', 'rejected', 'cancelled'].includes(coordinationCase.status),
 	).length;
+	const now = Date.now();
+	const resolvedCount = cases.filter((item) => item.status === 'resolved' || item.resolution_state === 'resolved').length;
+	const overdueCount = cases.filter((item) => item.sla_due_at && new Date(item.sla_due_at).getTime() < now && !closedStatuses.has(item.status)).length;
+	const unassignedCount = cases.filter((item) => item.responsible_member_id === null && !closedStatuses.has(item.status)).length;
+	const statusCounts = cases.reduce<Record<string, number>>((counts, item) => ({ ...counts, [item.status]: (counts[item.status] ?? 0) + 1 }), {});
+	const priorityCounts = ['critical', 'high', 'normal', 'low'].map((priority) => [priority, cases.filter((item) => item.priority === priority).length] as const);
+	const maxPriority = Math.max(1, ...priorityCounts.map(([, count]) => count));
+	const openCases = cases.filter((item) => !closedStatuses.has(item.status));
+	const ageCounts = [
+		['Today', openCases.filter((item) => caseAgeDays(item, now) === 0).length],
+		['1–7 days', openCases.filter((item) => caseAgeDays(item, now) >= 1 && caseAgeDays(item, now) <= 7).length],
+		['8–30 days', openCases.filter((item) => caseAgeDays(item, now) >= 8 && caseAgeDays(item, now) <= 30).length],
+		['30+ days', openCases.filter((item) => caseAgeDays(item, now) > 30).length],
+	] as const;
+	const statusTotal = Math.max(1, cases.length);
+	let statusOffset = 0;
+	const statusPalette = ['#2563eb', '#7c3aed', '#f59e0b', '#10b981', '#ef4444', '#64748b'];
+	const statusSegments = Object.entries(statusCounts).map(([status, count], index) => {
+		const start = (statusOffset / statusTotal) * 100;
+		statusOffset += count;
+		return `${statusPalette[index % statusPalette.length]} ${start}% ${(statusOffset / statusTotal) * 100}%`;
+	}).join(', ');
 
-	const cards = cases.length
-		? cases.map((coordinationCase) => caseCard(coordinationCase, members)).join('')
+	const cards = visibleCases.length
+		? visibleCases.map((coordinationCase) => caseCard(coordinationCase, members)).join('')
 		: `
                         <div class="empty">
-                                No coordination cases created yet.
+                                No cases match these filters. Clear filters to see everything.
                         </div>
                 `;
+	const activeFilterCount = Object.entries(filters).filter(([key, value]) => key !== 'sort' && Boolean(value)).length;
+	const unique = (values: string[]) => [...new Set(values)].sort().map((value) => [value, formatStatus(value)] as [string, string]);
+	const requesterOptions = [...new Map(cases.map((item) => [item.requester_member_id, item.requester_name])).entries()].map(([id, name]) => [String(id), name] as [string, string]);
+	const ownerOptions: Array<[string, string]> = [['unassigned', 'Unassigned'], ...requesterOptions];
+	const attention = [...cases].filter((item) => !closedStatuses.has(item.status)).sort((a, b) => {
+		const rank: Record<string, number> = { critical: 0, high: 1, normal: 2, low: 3 };
+		return (rank[a.priority] ?? 4) - (rank[b.priority] ?? 4) || new Date(a.requested_at).getTime() - new Date(b.requested_at).getTime();
+	}).slice(0, 5);
 
 	return `<!DOCTYPE html>
 <html lang="en">
@@ -730,6 +826,46 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
                         color: #64748b;
                 }
 
+				.page-nav { display:flex; gap:8px; margin-top:20px; border-bottom:1px solid #dbe3ef; }
+				.page-nav a { padding:11px 16px; text-decoration:none; color:#52647a; border-bottom:3px solid transparent; }
+				.page-nav a.active { color:#1769aa; border-color:#1769aa; }
+				.page-heading { display:flex; align-items:center; gap:12px; }
+				.filter-drawer { position:fixed; z-index:20; left:0; top:0; bottom:0; pointer-events:none; }
+				.filter-drawer summary { pointer-events:auto; position:absolute; top:22px; left:18px; width:44px; height:44px; display:grid; place-items:center; border-radius:12px; color:white; background:#173f6b; cursor:pointer; box-shadow:0 5px 18px #0f172a35; list-style:none; font-size:21px; }
+				.filter-drawer summary::-webkit-details-marker { display:none; }
+				.filter-drawer[open] { width:100%; background:#0f172a55; pointer-events:auto; }
+				.filter-drawer[open] summary { left:318px; background:#334155; }
+				.filter-panel { width:300px; height:100%; overflow:auto; background:#fff; padding:26px 20px; box-shadow:10px 0 30px #0f172a25; }
+				.filter-panel h2 { color:#173f6b; margin:0 0 4px; }
+				.filter-panel form { display:grid; gap:3px; }
+				.quick-views { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:15px 0; }
+				.quick-views a { padding:8px; border-radius:8px; background:#f1f5f9; color:#334155; font-size:12px; text-decoration:none; }
+				.filter-panel input, .filter-panel select { width:100%; border:1px solid #cbd5e1; border-radius:8px; padding:9px; background:white; }
+				.filter-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px; }
+				.apply { background:#1769aa; }
+				.clear { display:grid; place-items:center; border:1px solid #cbd5e1; border-radius:8px; text-decoration:none; color:#475569; }
+				.filter-trigger { background:#173f6b; color:white; border-radius:9px; padding:10px 13px; font-weight:700; }
+				.analytics-metrics { grid-template-columns:repeat(6,1fr); }
+				.analytics-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-bottom:20px; }
+				.analytics-card { background:white; border-radius:13px; padding:20px; box-shadow:0 3px 14px #0f172a12; }
+				.analytics-card h2 { color:#173f6b; margin:0 0 18px; }
+				.donut-wrap { display:flex; align-items:center; gap:26px; }
+				.donut { width:150px; aspect-ratio:1; flex:0 0 auto; border-radius:50%; background:conic-gradient(${statusSegments || '#e2e8f0 0 100%'}); position:relative; }
+				.donut::after { content:'${cases.length}'; position:absolute; inset:28px; display:grid; place-items:center; border-radius:50%; background:white; font-size:26px; font-weight:800; color:#173f6b; }
+				.legend { display:grid; gap:9px; width:100%; }
+				.legend-row { display:flex; justify-content:space-between; gap:15px; color:#475569; }
+				.legend-row i { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:7px; }
+				.bars { display:grid; gap:14px; }
+				.bar-row { display:grid; grid-template-columns:105px 1fr 30px; gap:10px; align-items:center; font-size:13px; text-transform:capitalize; }
+				.bar-track { height:10px; background:#eef2f7; border-radius:99px; overflow:hidden; }
+				.bar-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,#1769aa,#7c3aed); }
+				.attention-list { display:grid; gap:10px; }
+				.attention-item { display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:12px; padding:12px; border:1px solid #e2e8f0; border-radius:10px; text-decoration:none; color:#172033; }
+				.attention-item small { display:block; color:#64748b; margin-top:4px; }
+				.count-pill { min-width:28px; height:28px; display:grid; place-items:center; border-radius:8px; background:#eff6ff; color:#1769aa; font-weight:800; }
+				.case-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:18px 0; }
+				.case-toolbar p { margin:0; }
+
                 @media (max-width: 800px) {
                         body {
                                 padding: 16px;
@@ -745,6 +881,11 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
                         .form-grid {
                                 grid-template-columns: 1fr;
                         }
+						.analytics-metrics { grid-template-columns:repeat(2,1fr); }
+						.analytics-grid { grid-template-columns:1fr; }
+						.donut-wrap { align-items:flex-start; flex-direction:column; }
+						.filter-drawer summary { top:10px; left:8px; }
+						.filter-drawer[open] summary { left:auto; right:10px; }
                 }
         </style>
 </head>
@@ -752,10 +893,9 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
         <main>
                 <header>
                         <div>
-                                <h1>Coordination cases</h1>
+                                <div class="page-heading"><h1>Coordination</h1></div>
                                 <p>
-                                        Review blockers, assign owners
-                                        and record decisions.
+										Turn blockers into owned, measurable outcomes.
                                 </p>
                         </div>
 
@@ -764,28 +904,73 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
                         </a>
                 </header>
 
-                <section class="metrics">
-                        <div class="metric">
-                                Open cases
-                                <strong>${openCount}</strong>
-                        </div>
-
-                        <div class="metric">
-                                Awaiting manager
-                                <strong>${pendingCount}</strong>
-                        </div>
-
-                        <div class="metric">
-                                Critical
-                                <strong>${criticalCount}</strong>
-                        </div>
-                </section>
+				<nav class="page-nav" aria-label="Coordination views">
+					<a class="${view === 'overview' ? 'active' : ''}" href="/dashboard/cases?project=${projectId}&amp;view=overview">Overview</a>
+					<a class="${view === 'cases' ? 'active' : ''}" href="/dashboard/cases?project=${projectId}&amp;view=cases">All cases</a>
+				</nav>
 
                 ${message ? `<div class="notice">${escapeHtml(message)}</div>` : ''}
 
                 ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
-                ${cards}
+				${view === 'overview' ? `
+				<section class="metrics analytics-metrics" aria-label="Case summary">
+					<div class="metric">Open<strong>${openCount}</strong></div>
+					<div class="metric">Awaiting manager<strong>${pendingCount}</strong></div>
+					<div class="metric">Overdue<strong>${overdueCount}</strong></div>
+					<div class="metric">Critical<strong>${criticalCount}</strong></div>
+					<div class="metric">Unassigned<strong>${unassignedCount}</strong></div>
+					<div class="metric">Resolved<strong>${resolvedCount}</strong></div>
+				</section>
+				<section class="analytics-grid">
+					<div class="analytics-card">
+						<h2>Case status</h2>
+						<div class="donut-wrap"><div class="donut" role="img" aria-label="Case status distribution"></div><div class="legend">
+						${Object.entries(statusCounts).map(([status, count], index) => `<div class="legend-row"><span><i style="background:${statusPalette[index % statusPalette.length]}"></i>${escapeHtml(formatStatus(status))}</span><strong>${count}</strong></div>`).join('') || '<span>No cases yet</span>'}
+						</div></div>
+					</div>
+					<div class="analytics-card"><h2>Priority mix</h2><div class="bars">
+						${priorityCounts.map(([priority, count]) => `<div class="bar-row"><span>${priority}</span><div class="bar-track"><div class="bar-fill" style="width:${(count / maxPriority) * 100}%"></div></div><strong>${count}</strong></div>`).join('')}
+					</div></div>
+					<div class="analytics-card"><h2>Open-case age</h2><div class="bars">
+						${ageCounts.map(([label, count]) => `<div class="bar-row"><span>${label}</span><div class="bar-track"><div class="bar-fill" style="width:${openCases.length ? (count / openCases.length) * 100 : 0}%"></div></div><strong>${count}</strong></div>`).join('')}
+					</div></div>
+					<div class="analytics-card"><h2>Needs attention</h2><div class="attention-list">
+						${attention.map((item) => `<a class="attention-item" href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;search=${item.id}"><span class="count-pill">#${item.id}</span><span><strong>${escapeHtml(item.issue_summary)}</strong><small>${escapeHtml(item.responsible_name ?? 'Unassigned')} · ${caseAgeDays(item, now)} day(s) open</small></span><span class="badge ${escapeHtml(item.priority)}">${escapeHtml(item.priority)}</span></a>`).join('') || '<p>No open cases need attention.</p>'}
+					</div></div>
+				</section>
+				` : `
+				<details class="filter-drawer">
+					<summary aria-label="Open case filters" title="Filters">☰</summary>
+					<aside class="filter-panel" aria-label="Case filters">
+						<h2>Filter cases</h2><p>Find the work that needs attention.</p>
+						<div class="quick-views" aria-label="Quick views">
+							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;quick=open">All open</a>
+							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;quick=unassigned">Unassigned</a>
+							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;quick=overdue">Overdue</a>
+							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;quick=awaiting_verification">Awaiting verification</a>
+							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;quick=resolved">Resolved</a>
+						</div>
+						<form method="get" action="/dashboard/cases">
+							<input type="hidden" name="project" value="${projectId}"><input type="hidden" name="view" value="cases">
+							<label>Search<input name="search" value="${escapeHtml(filters.search)}" placeholder="Case, person or issue"></label>
+							<label>Requester<select name="requester">${selectOptions(requesterOptions, filters.requester)}</select></label>
+							<label>Responsible person<select name="owner">${selectOptions(ownerOptions, filters.owner)}</select></label>
+							<label>Status<select name="status">${selectOptions(unique(cases.map((item) => item.status)), filters.status)}</select></label>
+							<label>Priority<select name="priority">${selectOptions(unique(cases.map((item) => item.priority)), filters.priority)}</select></label>
+							<label>Case type<select name="type">${selectOptions(unique(cases.map((item) => item.case_type)), filters.type)}</select></label>
+							<label>Resolution state<select name="resolution">${selectOptions(unique(cases.map((item) => item.resolution_state)), filters.resolution)}</select></label>
+							<label>Case age<select name="age">${selectOptions([['today','Today'],['7','Last 7 days'],['30','Last 30 days'],['older','Older than 30 days']], filters.age)}</select></label>
+							<label>SLA<select name="sla">${selectOptions([['on_track','On track'],['due_soon','Due soon'],['overdue','Overdue']], filters.sla)}</select></label>
+							<label>Meeting duration<select name="duration">${selectOptions([...allowedDurations].map((duration) => [String(duration), `${duration} minutes`] as [string, string]), filters.duration)}</select></label>
+							<label>Sort by<select name="sort">${[['priority','Priority'],['newest','Newest'],['oldest','Oldest'],['sla','SLA deadline']].map(([value,label]) => `<option value="${value}" ${filters.sort === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+							<div class="filter-actions"><button class="apply" type="submit">Apply filters</button><a class="clear" href="/dashboard/cases?project=${projectId}&amp;view=cases">Clear</a></div>
+						</form>
+					</aside>
+				</details>
+				<div class="case-toolbar"><span class="filter-trigger">☰ Filters${activeFilterCount ? ` · ${activeFilterCount} active` : ''}</span><p>Showing <strong>${visibleCases.length}</strong> of ${cases.length} cases</p></div>
+				${cards}
+				`}
         </main>
 </body>
 </html>`;
@@ -798,12 +983,13 @@ async function renderPage(
 	projectId: number,
 	error: string | null = null,
 ): Promise<Response> {
+	const requestUrl = new URL(request.url);
 	const [cases, members] = await Promise.all([
 		getCases(env.DB, principal.tenantId, projectId),
 		getMembers(env.DB, principal.tenantId, projectId),
 	]);
 
-	const updated = new URL(request.url).searchParams.get('updated');
+	const updated = requestUrl.searchParams.get('updated');
 
 	const message =
 		updated === 'approved'
@@ -820,7 +1006,7 @@ async function renderPage(
 								? 'Coordination case escalated.'
 						: null;
 
-	return htmlResponse(page(cases, members, message, error), error ? 400 : 200);
+	return htmlResponse(page(cases, members, message, error, requestUrl, projectId), error ? 400 : 200);
 }
 
 async function getCase(db: D1Database, caseId: number, tenantId: number, projectId: number): Promise<CaseRow | null> {

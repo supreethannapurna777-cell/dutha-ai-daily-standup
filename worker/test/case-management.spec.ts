@@ -287,6 +287,37 @@ describe("manager coordination case controls", () => {
                 );
         });
 
+        it("shows an analytics overview and filters the case workspace", async () => {
+                const overview = await caseManagementResponse(
+                        new Request(
+                                "https://example.com/dashboard/cases?view=overview",
+                                { headers: { Authorization: authorisation() } },
+                        ),
+                        caseEnv,
+                );
+                const overviewHtml = await overview.text();
+
+                expect(overview.status).toBe(200);
+                expect(overviewHtml).toContain("Case status");
+                expect(overviewHtml).toContain("Priority mix");
+                expect(overviewHtml).toContain("Open-case age");
+                expect(overviewHtml).toContain("Needs attention");
+
+                const filtered = await caseManagementResponse(
+                        new Request(
+                                "https://example.com/dashboard/cases?view=cases&priority=critical",
+                                { headers: { Authorization: authorisation() } },
+                        ),
+                        caseEnv,
+                );
+                const filteredHtml = await filtered.text();
+
+                expect(filteredHtml).toContain("Filter cases");
+                expect(filteredHtml).toContain("1 active");
+                expect(filteredHtml).toContain("Showing <strong>0</strong> of 1 cases");
+                expect(filteredHtml).not.toContain("<h2>Blocked by configuration</h2>");
+        });
+
         it("allows the manager to approve and assign a case", async () => {
                 const body = new URLSearchParams({
                         case_id: String(caseId),
