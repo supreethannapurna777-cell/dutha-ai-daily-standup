@@ -38,6 +38,123 @@ export type VoiceMessageReceiver = (
 ) => Promise<boolean>;
 
 
+function deliveryError(status: Record<string, unknown>): string | null {
+	const errors = Array.isArray(status.errors) ? status.errors : [];
+	const firstError = errors[0];
+
+	if (typeof firstError !== "object" || firstError === null) {
+		return null;
+	}
+
+	const error = firstError as Record<string, unknown>;
+	const details = typeof error.error_data === "object" && error.error_data !== null
+		? error.error_data as Record<string, unknown>
+		: {};
+
+	if (typeof details.details === "string") {
+		return details.details;
+	}
+	if (typeof error.title === "string") {
+		return error.title;
+	}
+	return typeof error.message === "string" ? error.message : null;
+}
+
+
+async function processDeliveryStatuses(
+	value: Record<string, unknown>,
+	db: D1Database,
+): Promise<void> {
+	const statuses = Array.isArray(value.statuses) ? value.statuses : [];
+
+	for (const statusValue of statuses) {
+		if (typeof statusValue !== "object" || statusValue === null) {
+			continue;
+		}
+
+		const status = statusValue as Record<string, unknown>;
+		const messageId = typeof status.id === "string" ? status.id.trim() : "";
+		const deliveryStatus = typeof status.status === "string"
+			? status.status.trim().toLowerCase()
+			: "";
+
+		if (!messageId || !["sent", "delivered", "read", "failed"].includes(deliveryStatus)) {
+			continue;
+		}
+
+		const existing = await db.prepare(
+			`
+			SELECT id, team_member_id, message_type, scheduled_for, status
+			FROM sent_messages
+			WHERE whatsapp_message_id = ?
+			LIMIT 1
+			`,
+		)
+			.bind(messageId)
+			.first<{
+				id: number;
+				team_member_id: number;
+				message_type: string;
+				scheduled_for: string;
+				status: string;
+			}>();
+
+		if (!existing || existing.status === deliveryStatus) {
+			continue;
+		}
+
+		const rank: Record<string, number> = {
+			submitted: 0,
+			sent: 1,
+			delivered: 2,
+			read: 3,
+			failed: 4,
+		};
+		if ((rank[deliveryStatus] ?? 0) < (rank[existing.status] ?? 0)) {
+			continue;
+		}
+
+		const error = deliveryStatus === "failed" ? deliveryError(status) : null;
+		await db.prepare(
+			`
+			UPDATE sent_messages
+			SET status = ?, error_message = ?
+			WHERE id = ?
+			`,
+		)
+			.bind(deliveryStatus, error, existing.id)
+			.run();
+
+		if (existing.message_type !== "meeting_notification") {
+			continue;
+		}
+
+		const match = /^case:(\d+):meeting$/.exec(existing.scheduled_for);
+		if (!match) {
+			continue;
+		}
+
+		await db.prepare(
+			`
+			INSERT INTO case_events (
+				case_id, event_type, actor_type, actor_member_id, details
+			)
+			VALUES (?, ?, 'system', ?, ?)
+			`,
+		)
+			.bind(
+				Number(match[1]),
+				`meeting_link_notification_${deliveryStatus}`,
+				existing.team_member_id,
+				error
+					? `WhatsApp delivery failed: ${error}`
+					: `WhatsApp notification ${deliveryStatus}`,
+			)
+			.run();
+	}
+}
+
+
 function timestampToIso(
         timestamp: unknown,
         fallback: Date,
@@ -201,6 +318,8 @@ export async function processWebhookPayload(
                                                 unknown
                                         >
                                         : {};
+
+						await processDeliveryStatuses(value, db);
 
                         const contacts =
                                 Array.isArray(

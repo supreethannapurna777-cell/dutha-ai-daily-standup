@@ -18,6 +18,7 @@
                 "WHATSAPP_INITIAL_TEMPLATE_NAME": "daily_standup_request",
                 "WHATSAPP_REMINDER_TEMPLATE_NAME": "daily_standup_reminder",
                 "WHATSAPP_AVAILABILITY_TEMPLATE_NAME": "coordination_availability_request",
+                "WHATSAPP_MEETING_TEMPLATE_NAME": "coordination_meeting_scheduled",
                 "AUTOMATION_ENABLED": "true",
                 "TEAMS_RELEASE_ENABLED": "false",
                 "DASHBOARD_USERNAME": "admin"

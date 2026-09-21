@@ -243,3 +243,28 @@ export function sendAvailabilityRequest(
 		fetcher,
 	);
 }
+
+
+export function sendMeetingScheduled(
+	env: WorkerEnv,
+	member: Pick<TeamMember, "name" | "phone">,
+	caseId: number,
+	meetingTime: string,
+	durationMinutes: number,
+	meetingLink: string,
+	fetcher: Fetcher = fetch,
+): Promise<SendResult> {
+	return sendTemplateMessage(
+		env,
+		member.phone,
+		env.WHATSAPP_MEETING_TEMPLATE_NAME ?? "",
+		[
+			member.name,
+			String(caseId),
+			meetingTime,
+			String(durationMinutes),
+			meetingLink,
+		],
+		fetcher,
+	);
+}

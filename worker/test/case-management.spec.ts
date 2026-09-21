@@ -20,6 +20,8 @@ const caseEnv = {
         WHATSAPP_API_VERSION: "v26.0",
         WHATSAPP_ACCESS_TOKEN: "test-token",
         WHATSAPP_PHONE_NUMBER_ID: "123456789",
+	WHATSAPP_TEMPLATE_LANGUAGE: "en_US",
+	WHATSAPP_MEETING_TEMPLATE_NAME: "coordination_meeting_scheduled",
 } as WorkerEnv;
 
 
@@ -490,11 +492,9 @@ describe("manager coordination case controls", () => {
                         "Save link and notify participants",
                 );
 
-                const fetcher = vi.fn(async () =>
-                        Response.json({
-                                messages: [{ id: "wamid.meeting" }],
-                        }),
-                );
+                const fetcher = vi.fn()
+			.mockResolvedValueOnce(Response.json({ messages: [{ id: "wamid.meeting-1" }] }))
+			.mockResolvedValueOnce(Response.json({ messages: [{ id: "wamid.meeting-2" }] }));
 
                 const meetingLink =
                         "https://teams.microsoft.com/l/meetup-join/test";
@@ -533,20 +533,25 @@ describe("manager coordination case controls", () => {
                         meeting_link: meetingLink,
                 });
 
-                const sentEvents = await env.DB
+                const submittedMessages = await env.DB
                         .prepare(
                                 `
                                 SELECT COUNT(*) AS count
-                                FROM case_events
-                                WHERE case_id = ?
-                                        AND event_type =
-                                                'meeting_link_notification_sent'
+                                FROM sent_messages
+                                WHERE message_type = 'meeting_notification'
+					AND scheduled_for = ?
+					AND status = 'submitted'
                                 `,
                         )
-                        .bind(caseId)
+			.bind(`case:${caseId}:meeting`)
                         .first<{ count: number }>();
 
-                expect(sentEvents?.count).toBe(2);
+		expect(submittedMessages?.count).toBe(2);
+
+		const statusResponse = await caseManagementResponse(request(), caseEnv);
+		const statusHtml = await statusResponse.text();
+		expect(statusHtml).toContain("0 delivered,");
+		expect(statusHtml).toContain("2 awaiting delivery,");
 
                 const secondResponse =
                         await caseManagementResponse(

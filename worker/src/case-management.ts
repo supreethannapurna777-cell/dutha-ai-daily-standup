@@ -1,11 +1,12 @@
 import type { WorkerEnv } from './env';
 import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
-import { sendTextMessage, type Fetcher } from './whatsapp';
+import { sendMeetingScheduled, type Fetcher } from './whatsapp';
 import { jiraConfigFromEnv, syncApprovedCaseToJira } from './jira-sync';
 import { atlassianMcpConfigFromEnv } from './atlassian-mcp';
 
 interface CaseRow {
 	id: number;
+	tenant_id: number;
 	requester_member_id: number;
 	requester_name: string;
 	responsible_member_id: number | null;
@@ -29,6 +30,9 @@ interface CaseRow {
 	external_issue_url: string | null;
 	external_status: string | null;
 	jira_sync_status: string | null;
+	meeting_notifications_submitted: number;
+	meeting_notifications_delivered: number;
+	meeting_notifications_failed: number;
 }
 
 interface MemberOption {
@@ -105,6 +109,7 @@ async function getCases(db: D1Database, tenantId: number, projectId: number): Pr
 			`
                         SELECT
                                 coordination.id,
+				coordination.tenant_id,
                                 coordination.requester_member_id,
                                 requester.name
                                         AS requester_name,
@@ -129,7 +134,19 @@ async function getCases(db: D1Database, tenantId: number, projectId: number): Pr
                                 jira.external_issue_key,
                                 jira.external_issue_url,
                                 jira.external_status,
-                                jira.sync_status AS jira_sync_status
+                                jira.sync_status AS jira_sync_status,
+				COALESCE((SELECT COUNT(*) FROM sent_messages AS submitted
+					WHERE submitted.message_type = 'meeting_notification'
+						AND submitted.scheduled_for = ('case:' || coordination.id || ':meeting')
+						AND submitted.status IN ('submitted', 'sent')), 0) AS meeting_notifications_submitted,
+				COALESCE((SELECT COUNT(*) FROM sent_messages AS delivered
+					WHERE delivered.message_type = 'meeting_notification'
+						AND delivered.scheduled_for = ('case:' || coordination.id || ':meeting')
+						AND delivered.status IN ('delivered', 'read')), 0) AS meeting_notifications_delivered,
+				COALESCE((SELECT COUNT(*) FROM sent_messages AS failed
+					WHERE failed.message_type = 'meeting_notification'
+						AND failed.scheduled_for = ('case:' || coordination.id || ':meeting')
+						AND failed.status = 'failed'), 0) AS meeting_notifications_failed
                         FROM coordination_cases
                                 AS coordination
                         INNER JOIN team_members
@@ -426,11 +443,25 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
                                                         </a>
                                                 </div>
                                         `
-														: ''
-												}
+										: ''
+									}
+
+			${
+				coordinationCase.meeting_notifications_submitted
+				|| coordinationCase.meeting_notifications_delivered
+				|| coordinationCase.meeting_notifications_failed
+					? `
+				<div class="notes">
+					<strong>WhatsApp:</strong>
+					${coordinationCase.meeting_notifications_delivered} delivered,
+					${coordinationCase.meeting_notifications_submitted} awaiting delivery,
+					${coordinationCase.meeting_notifications_failed} failed
+				</div>
+			` : ''
+			}
 
                         ${
-													canResolve
+									canResolve
 														? `
                                                 <div class="actions">
                                                         <a
@@ -1059,6 +1090,7 @@ async function getCase(db: D1Database, caseId: number, tenantId: number, project
 			`
                         SELECT
                                 coordination.id,
+				coordination.tenant_id,
                                 coordination.requester_member_id,
                                 requester.name
                                         AS requester_name,
@@ -1083,7 +1115,19 @@ async function getCase(db: D1Database, caseId: number, tenantId: number, project
                                 jira.external_issue_key,
                                 jira.external_issue_url,
                                 jira.external_status,
-                                jira.sync_status AS jira_sync_status
+                                jira.sync_status AS jira_sync_status,
+				COALESCE((SELECT COUNT(*) FROM sent_messages AS submitted
+					WHERE submitted.message_type = 'meeting_notification'
+						AND submitted.scheduled_for = ('case:' || coordination.id || ':meeting')
+						AND submitted.status IN ('submitted', 'sent')), 0) AS meeting_notifications_submitted,
+				COALESCE((SELECT COUNT(*) FROM sent_messages AS delivered
+					WHERE delivered.message_type = 'meeting_notification'
+						AND delivered.scheduled_for = ('case:' || coordination.id || ':meeting')
+						AND delivered.status IN ('delivered', 'read')), 0) AS meeting_notifications_delivered,
+				COALESCE((SELECT COUNT(*) FROM sent_messages AS failed
+					WHERE failed.message_type = 'meeting_notification'
+						AND failed.scheduled_for = ('case:' || coordination.id || ':meeting')
+						AND failed.status = 'failed'), 0) AS meeting_notifications_failed
                         FROM coordination_cases
                                 AS coordination
                         INNER JOIN team_members
@@ -1139,42 +1183,72 @@ function validMeetingLink(value: string): boolean {
 	}
 }
 
-function formatMeetingTime(value: string): string {
+function formatMeetingTime(value: string, timezone = 'UTC'): string {
 	const date = new Date(value);
 
 	if (Number.isNaN(date.getTime())) {
 		return value;
 	}
 
-	return (
-		new Intl.DateTimeFormat('en-US', {
+	try {
+		return `${new Intl.DateTimeFormat('en-IN', {
+			dateStyle: 'medium',
+			timeStyle: 'short',
+			timeZone: timezone,
+		}).format(date)} (${timezone})`;
+	} catch {
+		return `${new Intl.DateTimeFormat('en-IN', {
 			dateStyle: 'medium',
 			timeStyle: 'short',
 			timeZone: 'UTC',
-		}).format(date) + ' UTC'
-	);
+		}).format(date)} (UTC)`;
+	}
 }
 
 async function participantWasNotified(db: D1Database, caseId: number, memberId: number): Promise<boolean> {
-	const event = await db
+	const message = await db
 		.prepare(
 			`
-                        SELECT id
-                        FROM case_events
-                        WHERE case_id = ?
-                                AND event_type =
-                                        'meeting_link_notification_sent'
-                                AND actor_member_id = ?
-                        LIMIT 1
-                        `,
+				SELECT id
+				FROM sent_messages
+				WHERE team_member_id = ?
+					AND message_type = 'meeting_notification'
+					AND scheduled_for = ?
+					AND status IN ('submitted', 'sent', 'delivered', 'read')
+				LIMIT 1
+				`,
 		)
-		.bind(caseId, memberId)
+		.bind(memberId, `case:${caseId}:meeting`)
 		.first<{ id: number }>();
 
-	return Boolean(event);
+	return Boolean(message);
 }
 
-async function recordParticipantNotification(db: D1Database, caseId: number, memberId: number): Promise<void> {
+async function recordParticipantNotification(
+	db: D1Database,
+	caseId: number,
+	memberId: number,
+	messageId: string,
+	tenantId: number,
+): Promise<void> {
+	await db.prepare(
+		`
+		INSERT INTO sent_messages (
+			team_member_id,
+			whatsapp_message_id,
+			message_type,
+			scheduled_for,
+			sent_at,
+			status,
+			error_message
+			, tenant_id
+		)
+		VALUES (?, ?, 'meeting_notification', ?, CURRENT_TIMESTAMP, 'submitted', NULL, ?)
+		`,
+	)
+		.bind(memberId, messageId, `case:${caseId}:meeting`, tenantId)
+		.run();
+
 	await db
 		.prepare(
 			`
@@ -1187,10 +1261,10 @@ async function recordParticipantNotification(db: D1Database, caseId: number, mem
                         )
                         VALUES (
                                 ?,
-                                'meeting_link_notification_sent',
+				'meeting_link_notification_submitted',
                                 'system',
                                 ?,
-                                'Meeting details sent by WhatsApp'
+				'Meeting notification accepted by WhatsApp for delivery'
                         )
                         `,
 		)
@@ -1210,7 +1284,7 @@ async function notifyParticipants(
 
 	const participants = await env.DB.prepare(
 		`
-                        SELECT id, phone
+			SELECT id, name, phone, timezone
                         FROM team_members
                         WHERE id IN (?, ?)
                         ORDER BY id
@@ -1219,33 +1293,49 @@ async function notifyParticipants(
 		.bind(coordinationCase.requester_member_id, coordinationCase.responsible_member_id)
 		.all<{
 			id: number;
+			name: string;
 			phone: string;
+			timezone: string;
 		}>();
 
 	if (participants.results.length !== 2) {
 		return 'Both participants must exist before scheduling.';
 	}
 
-	const message = [
-		'Discussion scheduled',
-		`Case #${coordinationCase.id}`,
-		`Time: ${formatMeetingTime(coordinationCase.proposed_time)}`,
-		`Duration: ${coordinationCase.meeting_duration_minutes} minutes`,
-		`Join: ${meetingLink}`,
-	].join('\n');
+	if (!env.WHATSAPP_MEETING_TEMPLATE_NAME) {
+		return 'Meeting link saved, but the WhatsApp meeting template is not configured.';
+	}
 
 	for (const participant of participants.results) {
 		if (await participantWasNotified(env.DB, coordinationCase.id, participant.id)) {
 			continue;
 		}
 
-		const result = await sendTextMessage(env, participant.phone, message, fetcher);
+		const result = await sendMeetingScheduled(
+			env,
+			participant,
+			coordinationCase.id,
+			formatMeetingTime(coordinationCase.proposed_time, participant.timezone),
+			coordinationCase.meeting_duration_minutes,
+			meetingLink,
+			fetcher,
+		);
 
 		if (!result.success) {
 			return 'Meeting link saved, but a WhatsApp notification failed. Submit again to retry.';
 		}
 
-		await recordParticipantNotification(env.DB, coordinationCase.id, participant.id);
+		if (!result.messageId) {
+			return 'Meeting link saved, but WhatsApp did not return a message ID. Submit again to retry.';
+		}
+
+		await recordParticipantNotification(
+			env.DB,
+			coordinationCase.id,
+			participant.id,
+			result.messageId,
+			coordinationCase.tenant_id,
+		);
 	}
 
 	return null;
@@ -1498,7 +1588,7 @@ async function processDecision(
 			.bind(caseId)
 			.run();
 
-		await recordManagerEvent(env.DB, caseId, 'meeting_scheduled', 'Meeting link saved and participants notified');
+		await recordManagerEvent(env.DB, caseId, 'meeting_scheduled', 'Meeting link saved and participant notifications submitted to WhatsApp');
 
 		return {
 			error: null,

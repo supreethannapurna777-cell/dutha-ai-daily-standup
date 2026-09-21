@@ -9,6 +9,7 @@ import type { WorkerEnv } from "../src/env";
 import {
 	sendAvailabilityRequest,
 	sendInitialRequest,
+	sendMeetingScheduled,
 	sendReminder,
 	sendTextMessage,
 	type TeamMember,
@@ -32,6 +33,8 @@ const testEnv = {
 		"daily_standup_reminder",
 	WHATSAPP_AVAILABILITY_TEMPLATE_NAME:
 		"coordination_availability_request",
+	WHATSAPP_MEETING_TEMPLATE_NAME:
+		"coordination_meeting_scheduled",
 	WHATSAPP_ACCESS_TOKEN: "private-test-token",
 	WHATSAPP_PHONE_NUMBER_ID: "123456789",
 } as WorkerEnv;
@@ -104,6 +107,42 @@ describe("WhatsApp template sending", () => {
 			"42",
 			"1. 15 Jan 2030, 1:00 pm\n2. 15 Jan 2030, 2:00 pm",
 			"42",
+		]);
+	});
+
+	it("sends scheduled meeting details with an approved template", async () => {
+		const fetcher = vi.fn(async () =>
+			Response.json({
+				messages: [{ id: "wamid.meeting-001" }],
+			}),
+		);
+
+		const result = await sendMeetingScheduled(
+			testEnv,
+			member,
+			9,
+			"21 Sept 2026, 9:00 pm (Asia/Kolkata)",
+			15,
+			"https://teams.microsoft.com/l/meetup-join/test",
+			fetcher,
+		);
+
+		expect(result).toEqual({
+			success: true,
+			messageId: "wamid.meeting-001",
+		});
+
+		const payload = JSON.parse(String(fetcher.mock.calls[0][1]?.body));
+		expect(payload.type).toBe("template");
+		expect(payload.template.name).toBe("coordination_meeting_scheduled");
+		expect(payload.template.components[0].parameters.map(
+			(parameter: { text: string }) => parameter.text,
+		)).toEqual([
+			"Supreeth",
+			"9",
+			"21 Sept 2026, 9:00 pm (Asia/Kolkata)",
+			"15",
+			"https://teams.microsoft.com/l/meetup-join/test",
 		]);
 	});
 

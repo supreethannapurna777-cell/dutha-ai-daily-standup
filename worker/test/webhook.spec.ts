@@ -69,6 +69,34 @@ function audioWebhookPayload(
 }
 
 
+function statusWebhookPayload(
+	messageId: string,
+	status: "sent" | "delivered" | "read" | "failed",
+) {
+	return {
+		object: "whatsapp_business_account",
+		entry: [{
+			changes: [{
+				field: "messages",
+				value: {
+					statuses: [{
+						id: messageId,
+						status,
+						timestamp: "1700000000",
+						...(status === "failed" ? {
+							errors: [{
+								title: "Message undeliverable",
+								error_data: { details: "Recipient is unavailable" },
+							}],
+						} : {}),
+					}],
+				},
+			}],
+		}],
+	};
+}
+
+
 describe("WhatsApp webhook processing", () => {
 	beforeEach(async () => {
 		await env.DB.batch([
@@ -246,5 +274,32 @@ describe("WhatsApp webhook processing", () => {
 			duplicates: 0,
 			ignored: 0,
 		});
+	});
+
+	it("records delivery status webhooks for meeting notifications", async () => {
+		const member = await env.DB.prepare(
+			"SELECT id FROM team_members WHERE phone = '919100000000'",
+		).first<{ id: number }>();
+		expect(member).toBeTruthy();
+
+		await env.DB.prepare(`
+			INSERT INTO sent_messages (
+				team_member_id, whatsapp_message_id, message_type,
+				scheduled_for, sent_at, status
+			) VALUES (?, 'wamid.delivery-001', 'meeting_notification',
+				'test:meeting', CURRENT_TIMESTAMP, 'submitted')
+		`).bind(member!.id).run();
+
+		const result = await processWebhookPayload(
+			statusWebhookPayload("wamid.delivery-001", "delivered"),
+			env.DB,
+		);
+		expect(result).toEqual({ received: 0, duplicates: 0, ignored: 0 });
+
+		const stored = await env.DB.prepare(`
+			SELECT status, error_message FROM sent_messages
+			WHERE whatsapp_message_id = 'wamid.delivery-001'
+		`).first<{ status: string; error_message: string | null }>();
+		expect(stored).toEqual({ status: "delivered", error_message: null });
 	});
 });
