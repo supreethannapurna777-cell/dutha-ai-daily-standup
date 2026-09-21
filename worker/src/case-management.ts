@@ -25,6 +25,10 @@ interface CaseRow {
 	resolution_verified_at: string | null;
 	requested_at: string;
 	updated_at: string;
+	external_issue_key: string | null;
+	external_issue_url: string | null;
+	external_status: string | null;
+	jira_sync_status: string | null;
 }
 
 interface MemberOption {
@@ -121,7 +125,11 @@ async function getCases(db: D1Database, tenantId: number, projectId: number): Pr
                                 coordination.resolution_proposed_at,
                                 coordination.resolution_verified_at,
                                 coordination.requested_at,
-                                coordination.updated_at
+                                coordination.updated_at,
+                                jira.external_issue_key,
+                                jira.external_issue_url,
+                                jira.external_status,
+                                jira.sync_status AS jira_sync_status
                         FROM coordination_cases
                                 AS coordination
                         INNER JOIN team_members
@@ -132,6 +140,11 @@ async function getCases(db: D1Database, tenantId: number, projectId: number): Pr
                                 AS responsible
                                 ON responsible.id
                                         = coordination.responsible_member_id
+                        LEFT JOIN jira_case_links
+                                AS jira
+                                ON jira.case_id = coordination.id
+                                        AND jira.tenant_id = coordination.tenant_id
+                                        AND jira.project_id = coordination.project_id
                         WHERE coordination.tenant_id = ?
                                 AND coordination.project_id = ?
                         ORDER BY
@@ -212,6 +225,7 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
 	const canSchedule = coordinationCase.status === 'time_agreed' && coordinationCase.proposed_time;
 	const canVerify = coordinationCase.resolution_state === 'awaiting_verification';
 	const canEscalate = !['resolved', 'awaiting_verification'].includes(coordinationCase.resolution_state);
+	const jiraUrl = safeExternalUrl(coordinationCase.external_issue_url);
 
 	return `
                 <article class="case-card">
@@ -263,6 +277,23 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
                                         <span>${escapeHtml(coordinationCase.sla_due_at ? new Date(coordinationCase.sla_due_at).toLocaleString('en-IN') : 'Set after triage')}</span>
                                 </div>
                         </div>
+
+                        ${coordinationCase.external_issue_key ? `
+                                <div class="notes jira-link">
+                                        <strong>Jira:</strong>
+                                        ${jiraUrl ? `
+                                                <a href="${escapeHtml(jiraUrl)}" target="_blank" rel="noopener noreferrer">
+                                                        ${escapeHtml(coordinationCase.external_issue_key)} ↗ Open in Jira
+                                                </a>
+                                        ` : escapeHtml(coordinationCase.external_issue_key)}
+                                        <span class="badge status">
+                                                ${escapeHtml(formatStatus(coordinationCase.external_status ?? 'status pending'))}
+                                        </span>
+                                        <span class="badge lifecycle">
+                                                ${escapeHtml(formatStatus(coordinationCase.jira_sync_status ?? 'unknown'))}
+                                        </span>
+                                </div>
+                        ` : ''}
 
                         ${
 													canDecide
@@ -490,6 +521,19 @@ interface CaseFilters {
 	sort: string;
 }
 
+function safeExternalUrl(value: string | null): string | null {
+	if (!value) {
+		return null;
+	}
+
+	try {
+		const url = new URL(value);
+		return url.protocol === 'https:' ? url.toString() : null;
+	} catch {
+		return null;
+	}
+}
+
 const closedStatuses = new Set(['resolved', 'rejected', 'cancelled']);
 
 function caseAgeDays(coordinationCase: CaseRow, now = Date.now()): number {
@@ -513,7 +557,7 @@ function filteredCases(cases: CaseRow[], filters: CaseFilters): CaseRow[] {
 		const age = caseAgeDays(item, now);
 		const overdue = Boolean(item.sla_due_at && new Date(item.sla_due_at).getTime() < now && !closedStatuses.has(item.status));
 		const query = filters.search.toLowerCase();
-		return (!query || `${item.id} ${item.issue_summary} ${item.requester_name} ${item.responsible_name ?? ''}`.toLowerCase().includes(query))
+		return (!query || `${item.id} ${item.issue_summary} ${item.requester_name} ${item.responsible_name ?? ''} ${item.external_issue_key ?? ''}`.toLowerCase().includes(query))
 			&& (!filters.quick || (filters.quick === 'open' ? !closedStatuses.has(item.status) : filters.quick === 'unassigned' ? item.responsible_member_id === null && !closedStatuses.has(item.status) : filters.quick === 'overdue' ? overdue : filters.quick === 'awaiting_verification' ? item.resolution_state === 'awaiting_verification' : item.status === 'resolved' || item.resolution_state === 'resolved'))
 			&& (!filters.requester || String(item.requester_member_id) === filters.requester)
 			&& (!filters.owner || (filters.owner === 'unassigned' ? item.responsible_member_id === null : String(item.responsible_member_id) === filters.owner))
@@ -1035,7 +1079,11 @@ async function getCase(db: D1Database, caseId: number, tenantId: number, project
                                 coordination.resolution_proposed_at,
                                 coordination.resolution_verified_at,
                                 coordination.requested_at,
-                                coordination.updated_at
+                                coordination.updated_at,
+                                jira.external_issue_key,
+                                jira.external_issue_url,
+                                jira.external_status,
+                                jira.sync_status AS jira_sync_status
                         FROM coordination_cases
                                 AS coordination
                         INNER JOIN team_members
@@ -1046,6 +1094,11 @@ async function getCase(db: D1Database, caseId: number, tenantId: number, project
                                 AS responsible
                                 ON responsible.id
                                         = coordination.responsible_member_id
+                        LEFT JOIN jira_case_links
+                                AS jira
+                                ON jira.case_id = coordination.id
+                                        AND jira.tenant_id = coordination.tenant_id
+                                        AND jira.project_id = coordination.project_id
                         WHERE coordination.id = ?
                                 AND coordination.tenant_id = ?
                                 AND coordination.project_id = ?

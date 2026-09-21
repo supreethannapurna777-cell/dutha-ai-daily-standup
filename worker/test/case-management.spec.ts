@@ -416,6 +416,16 @@ describe("manager coordination case controls", () => {
                         sync_status: "synced",
                         external_issue_key: "DUTHA-50",
                 });
+
+                const pageResponse = await caseManagementResponse(request(), caseEnv);
+                const pageHtml = await pageResponse.text();
+
+                expect(pageHtml).toContain("DUTHA-50");
+                expect(pageHtml).toContain("Open in Jira");
+                expect(pageHtml).toContain(
+                        'href="https://example.atlassian.net/browse/DUTHA-50"',
+                );
+                expect(pageHtml).toContain("Synced");
         });
 
         it("allows the manager to reject a case", async () => {
