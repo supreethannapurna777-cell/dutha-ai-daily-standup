@@ -41,6 +41,7 @@ import {
         loginResponse,
         logoutResponse,
         managerActivationResponse,
+        forgotPasswordResponse,
 } from "./auth";
 import { projectManagementResponse } from "./project-management";
 import { channelManagementResponse } from "./channel-management";
@@ -301,6 +302,10 @@ export default {
 
                 if (url.pathname === "/manager/activate") {
                         return managerActivationResponse(request, env);
+                }
+
+                if (url.pathname === "/forgot-password") {
+                        return forgotPasswordResponse(request, env);
                 }
 
                 if (url.pathname === "/logout") {

@@ -1,4 +1,5 @@
 import type { WorkerEnv } from './env';
+import { sendManagerActivationEmail } from './email';
 
 const COOKIE_NAME = 'dutha_session';
 const SESSION_SECONDS = 8 * 60 * 60;
@@ -141,7 +142,7 @@ button{margin-top:22px;padding:13px;border:0;border-radius:9px;background:#1769a
 </style></head><body><main class="shell"><section class="brand"><span class="pill">Private management workspace</span><div class="mark">Dutha</div><p>Stand-ups, blockers and coordination—one calm view for the manager.</p></section>
 <section class="form"><h1>Welcome back</h1><p class="muted">Sign in to your WorkOps dashboard.</p>${successHtml}${errorHtml}
 <form method="post" action="/login"><input type="hidden" name="next" value="${html(next)}"><label for="username">Work email or recovery username</label><input id="username" name="username" autocomplete="username" required autofocus><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in securely</button></form>
-<div class="note">Authorised managers only · Session expires after 8 hours</div></section></main></body></html>`;
+<div class="note"><a href="/forgot-password">Forgot your password?</a><br>Authorised managers only · Session expires after 8 hours</div></section></main></body></html>`;
 	return new Response(body, { status: error ? 401 : 200, headers: secureHeaders() });
 }
 
@@ -230,6 +231,24 @@ export async function managerActivationResponse(request: Request, env: WorkerEnv
 		env.DB.prepare(`UPDATE management_activation_tokens SET used_at=CURRENT_TIMESTAMP WHERE id=?`).bind(row.id),
 	]);
 	return new Response(null, { status: 303, headers: { Location: '/login?activated=1', 'Cache-Control': 'no-store' } });
+}
+
+function forgotPasswordPage(message = ''): Response {
+	return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Password recovery · Dutha</title><style>:root{font-family:Inter,Arial,sans-serif;color:#172033;background:#eef4fb}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px}.card{width:min(560px,100%);background:#fff;border-radius:18px;padding:30px;box-shadow:0 18px 55px #173f6b24}h1{color:#173f6b}p{color:#64748b}label{display:grid;gap:7px;font-weight:700;margin:14px 0}input{padding:12px;border:1px solid #cbd5e1;border-radius:9px;font:inherit}button{padding:12px 16px;border:0;border-radius:9px;background:#1769aa;color:#fff;font-weight:800}.success{background:#dcfce7;color:#166534;padding:11px;border-radius:9px}</style></head><body><main class="card"><h1>Reset your password</h1><p>Enter your manager email. If the account exists, Dutha will send a secure one-time password link.</p>${message ? `<div class="success">${html(message)}</div>` : ''}<form method="post" action="/forgot-password"><label>Work email<input type="email" name="email" autocomplete="email" required></label><button>Send reset link</button></form><p><a href="/login">Return to sign in</a></p></main></body></html>`, { headers: secureHeaders() });
+}
+
+export async function forgotPasswordResponse(request: Request, env: WorkerEnv): Promise<Response> {
+	if (request.method === 'GET') return forgotPasswordPage();
+	if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+	if (!sameOrigin(request)) return new Response('Invalid request origin.', { status: 403 });
+	const form = await request.formData();
+	const email = String(form.get('email') ?? '').trim().toLowerCase();
+	const account = await env.DB.prepare(`SELECT id, tenant_id, display_name, email FROM management_users WHERE lower(email)=? AND active=1 LIMIT 1`).bind(email).first<{ id:number; tenant_id:number; display_name:string; email:string }>();
+	if (account) {
+		const token = await createManagerActivation(env.DB, account.id);
+		await sendManagerActivationEmail(env, account.tenant_id, account.email, account.display_name, `${new URL(request.url).origin}/manager/activate?token=${encodeURIComponent(token)}`);
+	}
+	return forgotPasswordPage('If that account exists, a secure reset link has been sent. It expires after 24 hours.');
 }
 
 export function logoutResponse(): Response {
