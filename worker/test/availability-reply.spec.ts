@@ -309,6 +309,48 @@ describe("WhatsApp availability replies", () => {
                 });
         });
 
+        it("accepts a simple option number for one pending availability request", async () => {
+                const coordinationCase =
+                        await createAvailabilityCase();
+
+                const result = await processAvailabilityReply(
+                        env.DB,
+                        "919100000000",
+                        "2",
+                );
+
+                expect(result).toEqual({
+                        handled: true,
+                        success: true,
+                        matched: false,
+                        error: undefined,
+                });
+
+                const selected = await env.DB
+                        .prepare(
+                                `
+                                SELECT option.starts_at
+                                FROM case_availability AS availability
+                                INNER JOIN case_time_options AS option
+                                        ON option.case_id = availability.case_id
+                                        AND option.starts_at = availability.available_at
+                                WHERE availability.case_id = ?
+                                        AND availability.member_id = ?
+                                        AND availability.available_at = ?
+                                `,
+                        )
+                        .bind(
+                                coordinationCase.id,
+                                coordinationCase.requesterId,
+                                "2030-01-15T09:30:00.000Z",
+                        )
+                        .first<{ starts_at: string }>();
+
+                expect(selected?.starts_at).toBe(
+                        "2030-01-15T09:30:00.000Z",
+                );
+        });
+
         it("rejects an unavailable option number", async () => {
                 const coordinationCase =
                         await createAvailabilityCase();

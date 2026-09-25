@@ -26,6 +26,33 @@ interface ParsedReply {
         optionNumbers: number[];
 }
 
+interface BareSelection {
+        optionNumbers: number[];
+}
+
+
+interface ActiveAvailabilityCaseRow {
+        id: number;
+}
+
+
+function parseOptionNumbers(
+        rawOptions: string,
+): number[] | null {
+        const values = rawOptions
+                .split(",")
+                .map((value) => value.trim());
+
+        if (
+                values.length === 0
+                || values.some((value) => !/^\d+$/.test(value))
+        ) {
+                return null;
+        }
+
+        return [...new Set(values.map(Number))];
+}
+
 
 function parseAvailabilityReply(
         text: string,
@@ -44,17 +71,12 @@ function parseAvailabilityReply(
         }
 
         const caseId = Number(match[1]);
-        const rawOptions = match[2]
-                .split(",")
-                .map((value) => value.trim());
+        const optionNumbers = parseOptionNumbers(match[2]);
 
         if (
                 !Number.isInteger(caseId)
                 || caseId <= 0
-                || rawOptions.length === 0
-                || rawOptions.some(
-                        (value) => !/^\d+$/.test(value),
-                )
+                || !optionNumbers
         ) {
                 return {
                         caseId,
@@ -64,12 +86,19 @@ function parseAvailabilityReply(
 
         return {
                 caseId,
-                optionNumbers: [
-                        ...new Set(
-                                rawOptions.map(Number),
-                        ),
-                ],
+                optionNumbers,
         };
+}
+
+
+function parseBareSelection(text: string): BareSelection | null {
+        const trimmed = text.trim();
+        if (!/^\d+(?:\s*,\s*\d+)*$/.test(trimmed)) {
+                return null;
+        }
+
+        const optionNumbers = parseOptionNumbers(trimmed);
+        return optionNumbers ? { optionNumbers } : null;
 }
 
 
@@ -78,13 +107,64 @@ export async function processAvailabilityReply(
         senderPhone: string,
         text: string,
 ): Promise<AvailabilityReplyResult> {
-        const parsed = parseAvailabilityReply(text);
+        let parsed = parseAvailabilityReply(text);
 
         if (!parsed) {
-                return {
-                        handled: false,
-                        success: false,
-                        matched: false,
+                const bareSelection = parseBareSelection(text);
+                if (!bareSelection) {
+                        return {
+                                handled: false,
+                                success: false,
+                                matched: false,
+                        };
+                }
+
+                const activeCases = await db
+                        .prepare(
+                                `
+                                SELECT coordination.id
+                                FROM coordination_cases AS coordination
+                                INNER JOIN team_members AS member
+                                        ON member.phone = ?
+                                        AND member.active = 1
+                                        AND (
+                                                coordination.requester_member_id = member.id
+                                                OR coordination.responsible_member_id = member.id
+                                        )
+                                WHERE coordination.status = 'availability_requested'
+                                        AND EXISTS (
+                                                SELECT 1
+                                                FROM case_time_options AS option
+                                                WHERE option.case_id = coordination.id
+                                                        AND option.status = 'proposed'
+                                        )
+                                ORDER BY coordination.id DESC
+                                `,
+                        )
+                        .bind(senderPhone.replace(/\D/g, ""))
+                        .all<ActiveAvailabilityCaseRow>();
+
+                if (activeCases.results.length === 0) {
+                        return {
+                                handled: false,
+                                success: false,
+                                matched: false,
+                        };
+                }
+
+                if (activeCases.results.length > 1) {
+                        return {
+                                handled: true,
+                                success: false,
+                                matched: false,
+                                error:
+                                        "More than one availability request is waiting. Reply using CASE <number>: 1,3",
+                        };
+                }
+
+                parsed = {
+                        caseId: activeCases.results[0].id,
+                        optionNumbers: bareSelection.optionNumbers,
                 };
         }
 
