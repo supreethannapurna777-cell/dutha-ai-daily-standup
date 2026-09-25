@@ -55,6 +55,7 @@ import { recoverIntegrationPipeline } from "./pipeline-reliability";
 import { deploymentPreflightResponse } from "./deployment-preflight";
 import { employeePortalResponse } from "./employee-portal";
 import { settingsManagementResponse } from "./settings-management";
+import { duthaUiScriptResponse, publicLandingResponse } from "./ui";
 
 export type { WorkerEnv } from "./env";
 
@@ -217,16 +218,18 @@ export default {
         ): Promise<Response> {
                 const url = new URL(request.url);
 
+                if (request.method === "GET" && url.pathname === "/assets/dutha-ui.js") return duthaUiScriptResponse();
+
+                if (request.method === "GET" && url.pathname === "/welcome") return publicLandingResponse();
+
                 if (
                         request.method === "GET"
                         && url.pathname === "/"
                 ) {
                         return jsonResponse({
-                                service:
-                                        "Dutha AI Daily Standup",
+                                service: "Dutha AI Daily Standup",
                                 status: "running",
-                                environment:
-                                        "cloudflare-worker",
+                                environment: "cloudflare-worker",
                         });
                 }
 

@@ -70,6 +70,21 @@ describe("Dutha AI Daily Standup worker", () => {
         );
 
         it(
+                "serves the public Dutha WorkOps welcome experience",
+                async () => {
+                        const response = await SELF.fetch(
+                                "https://example.com/welcome",
+                        );
+                        expect(response.status).toBe(200);
+                        const html = await response.text();
+                        expect(html).toContain(
+                                "Work moves better when everyone is aligned.",
+                        );
+                        expect(html).toContain("/employee/login");
+                },
+        );
+
+        it(
                 "verifies a valid Meta webhook request",
                 async () => {
                         const response = await callWorker(

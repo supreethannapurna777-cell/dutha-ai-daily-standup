@@ -1,5 +1,6 @@
 import type { WorkerEnv } from './env';
 import { sendManagerActivationEmail } from './email';
+import { duthaThemeCss, themeButton, themeScriptTag } from './ui';
 
 const COOKIE_NAME = 'dutha_session';
 const SESSION_SECONDS = 8 * 60 * 60;
@@ -28,7 +29,7 @@ function secureHeaders(): HeadersInit {
 		'X-Content-Type-Options': 'nosniff',
 		'Referrer-Policy': 'no-referrer',
 		'Content-Security-Policy':
-			"default-src 'none'; style-src 'unsafe-inline'; " + "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+			"default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; " + "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
 	};
 }
 
@@ -130,7 +131,7 @@ function loginPage(next: string, error = '', activated = false): Response {
 	const successHtml = activated ? '<div class="success">Account activated. You can sign in now.</div>' : '';
 	const body = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · Dutha WorkOps</title><style>
+<title>Sign in · Dutha WorkOps</title>${themeScriptTag}<style>
 :root{font-family:Inter,Arial,sans-serif;color:#172033;background:#eef4fb}*{box-sizing:border-box}
 body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at top right,#dbeafe 0,transparent 36%),#eef4fb}
 .shell{width:min(920px,100%);display:grid;grid-template-columns:1.05fr .95fr;background:#fff;border-radius:22px;overflow:hidden;box-shadow:0 24px 70px #173f6b26}
@@ -139,7 +140,8 @@ body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;back
 label{font-weight:700;margin:13px 0 7px}input{width:100%;padding:13px;border:1px solid #cbd5e1;border-radius:9px;font:inherit}input:focus{outline:3px solid #bfdbfe;border-color:#1769aa}
 button{margin-top:22px;padding:13px;border:0;border-radius:9px;background:#1769aa;color:#fff;font:inherit;font-weight:800;cursor:pointer}.error,.success{padding:11px;border-radius:8px}.error{color:#991b1b;background:#fee2e2}.success{color:#166534;background:#dcfce7}.note{margin-top:20px;color:#64748b;font-size:12px}
 @media(max-width:720px){.shell{grid-template-columns:1fr}.brand{padding:32px}.form{padding:36px 28px}}
-</style></head><body><main class="shell"><section class="brand"><span class="pill">Private management workspace</span><div class="mark">Dutha</div><p>Stand-ups, blockers and coordination—one calm view for the manager.</p></section>
+${duthaThemeCss}.brand{background:linear-gradient(145deg,var(--d-nav),var(--d-nav2),var(--d-teal))}.shell{backdrop-filter:blur(28px)}
+</style></head><body><div class="dutha-theme-corner">${themeButton}</div><main class="shell"><section class="brand"><span class="pill">Private management workspace</span><div class="mark">Dutha</div><p>Stand-ups, blockers and coordination—one calm view for the manager.</p></section>
 <section class="form"><h1>Welcome back</h1><p class="muted">Sign in to your WorkOps dashboard.</p>${successHtml}${errorHtml}
 <form method="post" action="/login"><input type="hidden" name="next" value="${html(next)}"><label for="username">Work email or recovery username</label><input id="username" name="username" autocomplete="username" required autofocus><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button type="submit">Sign in securely</button></form>
 <div class="note"><a href="/forgot-password">Forgot your password?</a><br>Authorised managers only · Session expires after 8 hours</div></section></main></body></html>`;

@@ -2,6 +2,7 @@ import type { WorkerEnv } from './env';
 import { generateEnrolmentCode, hashEnrolmentCode } from './enrolment';
 import QRCode from 'qrcode';
 import { sendEmployeeActivationEmail } from './email';
+import { duthaThemeCss, themeButton, themeScriptTag } from './ui';
 
 const COOKIE_NAME = 'dutha_employee_session';
 const SESSION_SECONDS = 8 * 60 * 60;
@@ -19,14 +20,14 @@ function headers(): HeadersInit {
 		'X-Frame-Options': 'DENY',
 		'X-Content-Type-Options': 'nosniff',
 		'Referrer-Policy': 'no-referrer',
-		'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+		'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
 	};
 }
 
 function page(title: string, content: string): Response {
-	return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Dutha</title><style>
+	return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)} · Dutha</title>${themeScriptTag}<style>
 :root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#152238;background:#f4f7fb}*{box-sizing:border-box}body{margin:0;padding:28px;background:radial-gradient(circle at 90% 0,#e0e7ff 0,transparent 28%),#f4f7fb}main{max-width:1080px;margin:auto}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:22px}.brand{font-size:25px;font-weight:900;color:#153e75}.card{background:#fff;border:1px solid #e5ebf3;border-radius:18px;padding:24px;box-shadow:0 12px 35px #173f6b12;margin-bottom:18px}h1,h2{color:#153e75;margin-top:0}h1{letter-spacing:-.03em}.muted{color:#64748b}.eyebrow{color:#2563eb;font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}.stat{padding:18px;border-radius:16px;background:linear-gradient(145deg,#153e75,#2563eb);color:#fff}.stat strong{display:block;font-size:24px;margin-top:7px}.channel{border:1px solid #dbe4ef;border-radius:14px;padding:20px;transition:transform .15s,box-shadow .15s}.channel:hover{transform:translateY(-2px);box-shadow:0 10px 24px #173f6b12}.ready{border-color:#86efac}.soon{background:#f8fafc}.badge{display:inline-block;border-radius:999px;padding:5px 9px;background:#e2e8f0;font-size:12px;font-weight:800}.green{background:#dcfce7;color:#166534}.error{background:#fee2e2;color:#991b1b;padding:11px;border-radius:9px}.success{background:#dcfce7;color:#166534;padding:13px;border-radius:9px}label{display:grid;gap:7px;font-weight:700;margin:14px 0}input,select{padding:12px;border:1px solid #cbd5e1;border-radius:9px;font:inherit;background:#fff}input[type=checkbox]{width:18px;height:18px;padding:0}.check{display:flex;align-items:center;gap:10px;font-weight:650}.actions{display:flex;gap:10px;flex-wrap:wrap}button,.button{display:inline-block;border:0;border-radius:10px;padding:12px 16px;background:#1769aa;color:#fff;text-decoration:none;font-weight:800;cursor:pointer}.secondary{background:#475569}.ghost{background:#eaf2ff;color:#174a82}code{display:block;padding:13px;background:#0f172a;color:#e2e8f0;border-radius:9px;overflow-wrap:anywhere}form.inline{display:inline}@media(max-width:700px){body{padding:16px}.grid,.stats{grid-template-columns:1fr}.top{align-items:start}.card{padding:18px}}
-</style></head><body><main><div class="top"><div class="brand">Dutha WorkOps</div></div>${content}</main></body></html>`, { headers: headers() });
+${duthaThemeCss}</style></head><body><div class="dutha-theme-corner">${themeButton}</div><main><div class="top"><div class="brand">Dutha WorkOps</div></div>${content}</main></body></html>`, { headers: headers() });
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

@@ -1,4 +1,5 @@
 import type { WorkerEnv } from './env';
+import { duthaThemeCss, themeButton, themeScriptTag } from './ui';
 import { accessibleProjects, managementPrincipalFromRequest, requireProjectAccess } from './access-control';
 import { getLocalScheduleDetails } from './scheduler';
 
@@ -427,6 +428,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                 content="width=device-width, initial-scale=1"
         >
         <title>Dutha WorkOps</title>
+        ${themeScriptTag}
 
         <style>
                 :root {
@@ -613,6 +615,8 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                         }
                 }
 
+                ${duthaThemeCss}
+                body{background-attachment:fixed!important}.header{padding:20px 22px;border:1px solid var(--d-line);border-radius:20px;background:var(--d-glass);backdrop-filter:blur(24px);box-shadow:0 12px 35px rgba(29,55,73,.07)}.cards .card{transition:transform .18s,box-shadow .18s}.cards .card:hover{transform:translateY(-3px)}
                 @media (max-width: 700px) {
                         body {
                                 padding: 16px;
@@ -641,6 +645,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                         </div>
 
                         <nav class="navigation">
+                                ${themeButton}
                                 ${projects.length > 1 ? `<form method="get" action="/dashboard">
                                         <select name="project" aria-label="Select project">
                                                 ${projectOptions}
@@ -755,7 +760,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 			'X-Frame-Options': 'DENY',
 			'X-Content-Type-Options': 'nosniff',
 			'Referrer-Policy': 'no-referrer',
-			'Content-Security-Policy': "default-src 'none'; " + "style-src 'unsafe-inline'; " + "frame-ancestors 'none'; " + "base-uri 'none'",
+			'Content-Security-Policy': "default-src 'none'; " + "style-src 'unsafe-inline'; script-src 'self'; " + "frame-ancestors 'none'; " + "base-uri 'none'",
 		},
 	});
 }
