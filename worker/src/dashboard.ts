@@ -322,6 +322,11 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 		tenantId: 1,
 		role: 'admin' as const,
 	};
+	const roleProfile = principal.role === 'admin'
+		? { eyebrow: 'ORGANISATION CONTROL', title: 'Executive command center', copy: 'Organisation-wide operational visibility and integration control.', focus: 'Organisation readiness' }
+		: principal.role === 'portfolio_leader'
+			? { eyebrow: 'PORTFOLIO CONTROL', title: 'Portfolio command center', copy: 'See delivery health across the projects you lead.', focus: 'Portfolio readiness' }
+			: { eyebrow: 'PROJECT CONTROL', title: 'Project command center', copy: 'Focus on today’s team signals, blockers and follow-through.', focus: 'Project readiness' };
 	const requestedProject = Number(new URL(request.url).searchParams.get('project') ?? 1);
 	if (!Number.isSafeInteger(requestedProject) || requestedProject <= 0) {
 		return new Response('Invalid project.', { status: 400 });
@@ -617,6 +622,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 
                 ${duthaThemeCss}
                 body{background-attachment:fixed!important}.header{padding:20px 22px;border:1px solid var(--d-line);border-radius:20px;background:var(--d-glass);backdrop-filter:blur(24px);box-shadow:0 12px 35px rgba(29,55,73,.07)}.cards .card{transition:transform .18s,box-shadow .18s}.cards .card:hover{transform:translateY(-3px)}[data-theme="dark"] body{background:radial-gradient(circle at 6% 0,#1e3a8a 0,transparent 34%),radial-gradient(circle at 94% 4%,#312e81 0,transparent 30%),#070b18!important;color:#e2e8f0!important}[data-theme="dark"] h1,[data-theme="dark"] .value{color:#f8fafc!important}[data-theme="dark"] .subtitle,[data-theme="dark"] .label, [data-theme="dark"] td small,[data-theme="dark"] footer{color:#94a3b8!important}[data-theme="dark"] .header,[data-theme="dark"] .card,[data-theme="dark"] .table-wrap{background:#111827d9!important;border:1px solid #334155!important;box-shadow:0 18px 50px #0007!important}[data-theme="dark"] th{background:#172554!important}[data-theme="dark"] td{border-color:#273449!important}[data-theme="dark"] .navigation a{background:linear-gradient(135deg,#2563eb,#7c3aed)!important}[data-theme="dark"] .navigation .cases{background:#312e81!important}
+                .eyebrow{color:#60a5fa;font-size:11px;letter-spacing:.11em;font-weight:900;margin-bottom:5px}.featured{background:linear-gradient(135deg,#1d4ed8,#4338ca)!important}.featured .label,.featured .value,.featured small{color:#fff!important}
                 @media (max-width: 700px) {
                         body {
                                 padding: 16px;
@@ -638,9 +644,9 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
         <main>
                 <div class="header">
                         <div>
-                                <h1>Dutha WorkOps</h1>
+                                <div class="eyebrow">${roleProfile.eyebrow}</div><h1>${roleProfile.title}</h1>
                                 <p class="subtitle">
-                                        Live team status as of ${escapeHtml(operationalTime)} IST
+                                        ${roleProfile.copy} · ${escapeHtml(operationalTime)} IST
                                 </p>
                         </div>
 
@@ -653,7 +659,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                                         <button type="submit">Open project</button>
                                 </form>` : ''}
 
-                                <a href="/dashboard/members?project=${requestedProject}">Manage project</a>
+                                <a href="/dashboard/members?project=${requestedProject}">${principal.role === 'project_manager' ? 'Manage team' : 'Manage project'}</a>
 
                                 <a
                                         class="cases"
@@ -677,6 +683,11 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                 </div>
 
                 <section class="cards">
+                        <div class="card featured">
+                                <div class="label">${roleProfile.focus}</div>
+                                <div class="value">${total ? Math.round((received / total) * 100) : 0}%</div>
+                                <small>${received} of ${total} active members reported today</small>
+                        </div>
                         <div class="card">
                                 <div class="label">
                                         Team updates today
