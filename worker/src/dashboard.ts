@@ -692,7 +692,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 
                         <div class="card">
                                 <div class="label">
-                                        Needs action
+                                        Open coordination cases
                                 </div>
                                 <div class="value case-value">
                                         ${openCases}

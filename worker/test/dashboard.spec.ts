@@ -207,6 +207,9 @@ describe("secure timezone-aware dashboard", () => {
                 expect(html).toContain(
                         "Needs action",
                 );
+			expect(html).toContain(
+			"Open coordination cases",
+		);
                 expect(html).toContain(
                         "Awaiting employee confirmation",
                 );
