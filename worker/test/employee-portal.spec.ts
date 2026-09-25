@@ -87,7 +87,8 @@ describe('employee portal', () => {
 		expect(html).toContain('<form method="post" target="_blank">');
 		expect(html).toContain('Microsoft Teams');
 		expect(html).toContain('Slack');
-		expect(html.match(/Coming soon/g)?.length).toBeGreaterThanOrEqual(3);
+		expect(html).toContain('<h2>Email</h2>');
+		expect(html.match(/Coming soon/g)?.length).toBe(2);
 	});
 
 	it('shows a secure desktop QR code with a personal JOIN instruction', async () => {
@@ -118,5 +119,20 @@ describe('employee portal', () => {
 		const response = await employeePortalResponse(request, portalEnv);
 		expect(response.status).toBe(303);
 		expect(decodeURIComponent(response.headers.get('Location') ?? '')).toMatch(/^https:\/\/wa\.me\/917013298834\?text=JOIN [A-Z0-9]{10} employee@example\.com$/);
+	});
+
+	it('lets an authenticated employee save communication preferences', async () => {
+		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
+		await employeePortalResponse(post('/employee/activate', { token, password: 'StrongPassword123', confirm_password: 'StrongPassword123' }), portalEnv);
+		const login = await employeePortalResponse(post('/employee/login', { email: 'employee@example.com', password: 'StrongPassword123' }), portalEnv);
+		const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+		const response = await employeePortalResponse(post('/employee/preferences', {
+			language: 'te', content_mode: 'voice', timezone: 'Asia/Kolkata', quiet_hours_start: '22:00', quiet_hours_end: '07:00',
+			standup_enabled: 'on', blocker_enabled: 'on', meeting_enabled: 'on',
+		}, cookie), portalEnv);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain('Preferences saved.');
+		const saved = await env.DB.prepare(`SELECT language,content_mode,reminder_enabled FROM employee_communication_preferences WHERE team_member_id=?`).bind(memberId).first<{ language:string; content_mode:string; reminder_enabled:number }>();
+		expect(saved).toEqual({ language: 'te', content_mode: 'voice', reminder_enabled: 0 });
 	});
 });
