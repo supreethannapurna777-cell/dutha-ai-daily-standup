@@ -384,7 +384,7 @@ describe("timezone-aware scheduled automation", () => {
                 );
         });
 
-        it("prevents a duplicate successful scheduled send", async () => {
+        it("prevents a duplicate after a successful send is delivered", async () => {
                 await insertMember(
                         "Supreeth",
                         "919100000000",
@@ -412,12 +412,34 @@ describe("timezone-aware scheduled automation", () => {
                 expect(second.selected).toBe(0);
                 expect(fetcher).toHaveBeenCalledTimes(1);
 
+                await env.DB
+                        .prepare(
+                                `
+                                UPDATE sent_messages
+                                SET status = 'delivered'
+                                WHERE message_type = 'initial'
+                                `,
+                        )
+                        .run();
+
+                const afterDelivery = await runScheduledAction(
+                        schedulerCron,
+                        indiaInitialTime,
+                        workerEnv,
+                        fetcher,
+                );
+
+                expect(first.sent).toBe(1);
+                expect(afterDelivery.sent).toBe(0);
+                expect(afterDelivery.selected).toBe(0);
+                expect(fetcher).toHaveBeenCalledTimes(1);
+
                 const count = await env.DB
                         .prepare(
                                 `
                                 SELECT COUNT(*) AS count
                                 FROM sent_messages
-                                WHERE status = 'sent'
+                                WHERE status = 'delivered'
                                 `,
                         )
                         .first<{ count: number }>();

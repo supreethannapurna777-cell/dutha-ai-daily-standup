@@ -218,7 +218,12 @@ async function wasAlreadySent(
                         WHERE team_member_id = ?
                                 AND message_type = ?
                                 AND scheduled_for = ?
-                                AND status = 'sent'
+                                AND status IN (
+                                        'submitted',
+                                        'sent',
+                                        'delivered',
+                                        'read'
+                                )
                         LIMIT 1
                         `,
                 )
