@@ -1,6 +1,7 @@
 import type { WorkerEnv } from './env';
 import { generateEnrolmentCode, hashEnrolmentCode } from './enrolment';
 import QRCode from 'qrcode';
+import { sendEmployeeActivationEmail } from './email';
 
 const COOKIE_NAME = 'dutha_employee_session';
 const SESSION_SECONDS = 8 * 60 * 60;
@@ -127,7 +128,20 @@ async function activationResponse(request: Request, env: WorkerEnv): Promise<Res
 }
 
 function loginForm(error = '', activated = false): Response {
-	return page('Employee sign in', `<section class="card"><h1>Employee sign in</h1>${activated ? '<div class="success">Account activated. You can sign in now.</div>' : ''}${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}<form method="post" action="/employee/login"><label>Work email<input type="email" name="email" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form></section>`);
+	return page('Employee sign in', `<section class="card"><h1>Employee sign in</h1>${activated ? '<div class="success">Account activated. You can sign in now.</div>' : ''}${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}<form method="post" action="/employee/login"><label>Work email<input type="email" name="email" autocomplete="username" required></label><label>Password<input type="password" name="password" autocomplete="current-password" required></label><button>Sign in</button></form><p><a href="/employee/forgot-password">Forgot your password?</a></p></section>`);
+}
+
+async function forgotPasswordResponse(request: Request, env: WorkerEnv): Promise<Response> {
+	if (request.method === 'GET') return page('Employee password recovery', '<section class="card"><h1>Reset employee password</h1><p class="muted">Enter your work email. If the account exists, a secure link will be sent.</p><form method="post"><label>Work email<input type="email" name="email" required></label><button>Send reset link</button></form></section>');
+	if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+	if (!sameOrigin(request)) return new Response('Invalid request origin.', { status: 403 });
+	const email = String((await request.formData()).get('email') ?? '').trim().toLowerCase();
+	const member = await env.DB.prepare(`SELECT id, tenant_id, name, email FROM team_members WHERE lower(email)=? AND active=1 LIMIT 1`).bind(email).first<{ id:number; tenant_id:number; name:string; email:string }>();
+	if (member) {
+		const token = await createEmployeeActivation(env.DB, member.id, member.tenant_id, member.email);
+		await sendEmployeeActivationEmail(env, member.tenant_id, member.email, member.name, `${new URL(request.url).origin}/employee/activate?token=${encodeURIComponent(token)}`);
+	}
+	return page('Employee password recovery', '<section class="card"><h1>Check your email</h1><div class="success">If that account exists, a secure reset link has been sent.</div><p><a href="/employee/login">Return to sign in</a></p></section>');
 }
 
 async function loginResponse(request: Request, env: WorkerEnv): Promise<Response> {
@@ -180,6 +194,7 @@ export async function employeePortalResponse(request: Request, env: WorkerEnv): 
 	const path = new URL(request.url).pathname;
 	if (path === '/employee/activate') return activationResponse(request, env);
 	if (path === '/employee/login') return loginResponse(request, env);
+	if (path === '/employee/forgot-password') return forgotPasswordResponse(request, env);
 	if (path === '/employee/logout') return new Response(null, { status: 303, headers: { Location: '/employee/login', 'Set-Cookie': `${COOKIE_NAME}=; Max-Age=0; Path=/employee; HttpOnly; Secure; SameSite=Strict` } });
 	const memberId = await memberFromSession(request, env);
 	if (!memberId) return Response.redirect(`${new URL(request.url).origin}/employee/login`, 302);

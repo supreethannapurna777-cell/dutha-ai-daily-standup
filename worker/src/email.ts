@@ -39,3 +39,28 @@ export async function sendManagerActivationEmail(
 	if (!response.ok) return { sent: false, reason: `Email provider returned ${response.status}.` };
 	return { sent: true };
 }
+
+export async function sendEmployeeActivationEmail(
+	env: WorkerEnv,
+	tenantId: number,
+	to: string,
+	name: string,
+	activationUrl: string,
+	fetcher: typeof fetch = fetch,
+): Promise<{ sent: boolean; reason?: string }> {
+	const settings = await emailSettings(env.DB, tenantId);
+	if (!env.RESEND_API_KEY || !settings) return { sent: false, reason: 'Email delivery is not configured.' };
+	const response = await fetcher('https://api.resend.com/emails', {
+		method: 'POST',
+		headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			from: `${settings.sender_name} <${settings.from_email}>`,
+			to: [to],
+			reply_to: settings.reply_to_email || undefined,
+			subject: `Reset your ${settings.company_name} Dutha employee account`,
+			html: `<div style="font-family:Arial,sans-serif;max-width:620px;margin:auto;color:#172033"><h1 style="color:#173f6b">Dutha WorkOps</h1><p>Hello ${escapeHtml(name)},</p><p>Use this secure link to create or reset your employee password.</p><p><a href="${escapeHtml(activationUrl)}">Continue securely</a></p><p>This one-time link expires after 24 hours.</p></div>`,
+		}),
+	});
+	if (!response.ok) return { sent: false, reason: `Email provider returned ${response.status}.` };
+	return { sent: true };
+}
