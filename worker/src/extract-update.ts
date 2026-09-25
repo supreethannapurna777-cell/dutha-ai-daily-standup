@@ -82,7 +82,7 @@ export function extractUpdate(
 		const taskParts: string[] = [];
 		for (const sentence of sentences) {
 			const taskMatch = sentence.match(
-				/^(?:task\s*:\s*|my\s+task\s+(?:for\s+)?today\s+is\s+|today\s+i\s+(?:will|am|plan\s+to|need\s+to)\s+|i\s+(?:will\s+work\s+on|am\s+working\s+on|am\s+verifying|am\s+testing)\s+|working\s+on\s+)(.+?)[.!?]?$/i,
+				/^(?:task\s*:\s*|my\s+task\s+(?:for\s+)?today\s+is\s+|today\s+i\s+(?:will|am|plan\s+to|need\s+to)\s+|(?:today\s+)?i\s+(?:will\s+work\s+on|am\s+working\s+on|am\s+verifying|am\s+testing|completed|finished)\s+|(?:completed|finished|working\s+on)\s+)(.+?)[.!?]?$/i,
 			);
 			if (!taskMatch) continue;
 			const task = taskMatch[1].trim();
@@ -96,7 +96,7 @@ export function extractUpdate(
 		}
 
 		const explicitPeopleMatch = text.match(
-			/(?:coordinate\s+with|connect\s+with)\s+([a-zA-Z][a-zA-Z ]+?)(?:\.|,|\n|$)/i,
+			/(?:coordinate\s+with|connect\s+with|need\s+(?:support|help)\s+from)\s+([a-zA-Z][a-zA-Z ]+?)(?=\s+for\b|\.|,|\n|$)/i,
 		);
 
 		const blockerSentences = sentences.filter((sentence) => {

@@ -84,6 +84,24 @@ describe("extractUpdate", () => {
 		).tasks).toBe("Validate the Jira return workflow");
 	});
 
+	it("extracts completed progress and a support contact", () => {
+		const reply = [
+			"Completed the Grafana dashboard today.",
+			"No blockers.",
+			"Need support from Supreeth for production access.",
+			"Expected completion today.",
+		].join("\n");
+
+		expect(extractUpdate(reply)).toEqual({
+			tasks: "the Grafana dashboard today",
+			people_to_connect: "Supreeth",
+			blockers: "None mentioned",
+			dependencies: "None mentioned",
+			expected_completion: "today",
+			original_reply: reply,
+		});
+	});
+
 	it("extracts a natural-language blocker, owner, task and duration", () => {
 		const reply = "Yesterday I completed the Prometheus target verification and corrected two monitoring alerts. Today I will connect the Git repository to ArgoCD and begin the deployment configuration. I am blocked because Kiran has not yet shared the repository URL and required access. Once I receive them, I need approximately two hours to complete the connection.";
 
