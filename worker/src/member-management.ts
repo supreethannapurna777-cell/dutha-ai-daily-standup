@@ -166,7 +166,12 @@ function dayCheckboxes(member: ManagedMember): string {
 
 function memberCard(member: ManagedMember): string {
 	return `
-                <form method="post" class="member-card">
+                <details class="member-card">
+			<summary class="member-title">
+				<div><h2>${escapeHtml(member.name)}</h2><p>${escapeHtml(member.department)}</p></div>
+				<span class="status ${member.active ? 'active' : 'inactive'}">${member.active ? 'Active' : 'Removed'}</span>
+			</summary>
+		<form method="post" class="member-form">
                         <input
                                 type="hidden"
                                 name="action"
@@ -177,16 +182,6 @@ function memberCard(member: ManagedMember): string {
                                 name="member_id"
                                 value="${member.id}"
                         >
-
-                        <div class="member-title">
-                                <div>
-                                        <h2>${escapeHtml(member.name)}</h2>
-                                        <p>${escapeHtml(member.department)}</p>
-                                </div>
-                                <span class="status ${member.active ? 'active' : 'inactive'}">
-                                        ${member.active ? 'Active' : 'Inactive'}
-                                </span>
-                        </div>
 
                         <div class="form-grid">
                                 <label>
@@ -275,12 +270,23 @@ function memberCard(member: ManagedMember): string {
                         <button type="submit">
                                 Save member schedule
                         </button>
-                </form>
+		</form>
+	</details>
         `;
 }
 
 function page(members: ManagedMember[], message: string | null, error: string | null, activationLink: string | null = null, projectId = 1): string {
-	const cards = members.length ? members.map(memberCard).join('') : `<p class="empty">No members configured.</p>`;
+	const activeMembers = members.filter((member) => member.active);
+	const removedMembers = members.filter((member) => !member.active);
+	const departments = new Map<string, ManagedMember[]>();
+	for (const member of activeMembers) {
+		const name = member.department.trim() || 'Unassigned';
+		departments.set(name, [...(departments.get(name) ?? []), member]);
+	}
+	const cards = [...departments.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([name, teamMembers]) => `
+		<details class="team-card"><summary><span><strong>${escapeHtml(name)}</strong><small>${teamMembers.length} active ${teamMembers.length === 1 ? 'member' : 'members'}</small></span><span class="open-label">Open team</span></summary><div class="team-members">${teamMembers.map(memberCard).join('')}</div></details>
+	`).join('') || `<p class="empty">No active members configured.</p>`;
+	const archive = removedMembers.length ? `<details class="archive"><summary><strong>Removed members</strong><span>${removedMembers.length}</span></summary><p>Excluded from normal scheduling. Open a member and mark them active to restore access.</p>${removedMembers.map(memberCard).join('')}</details>` : '';
 
 	return `<!DOCTYPE html>
 <html lang="en">
@@ -294,8 +300,9 @@ function page(members: ManagedMember[], message: string | null, error: string | 
         <style>
                 :root {
                         font-family: Inter, Arial, sans-serif;
-                        color: #172033;
-                        background: #f4f7fb;
+			color: #dbeafe;
+			background: #070b18;
+			color-scheme: dark;
                 }
 
                 * {
@@ -305,6 +312,8 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                 body {
                         margin: 0;
                         padding: 32px;
+			min-height:100vh;
+			background:radial-gradient(circle at 12% 0,#172554 0,transparent 38%),radial-gradient(circle at 92% 8%,#312e81 0,transparent 34%),#070b18;
                 }
 
                 main {
@@ -322,7 +331,7 @@ function page(members: ManagedMember[], message: string | null, error: string | 
 
                 h1 {
                         margin: 0 0 6px;
-                        color: #173f6b;
+			color: #f8fafc;
                 }
 
                 h2 {
@@ -330,12 +339,12 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                 }
 
                 p {
-                        color: #64748b;
+			color: #94a3b8;
                         margin: 4px 0;
                 }
 
                 a {
-                        color: #1769aa;
+			color: #93c5fd;
                         font-weight: 700;
                 }
 
@@ -347,8 +356,8 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                 }
 
                 .notice {
-                        background: #dcfce7;
-                        color: #166534;
+			background: #0c4a6e;
+			color: #e0f2fe;
                 }
 
                 .error {
@@ -357,20 +366,18 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                 }
 
                 .add-card,
-                .member-card {
-                        background: white;
-                        border-radius: 14px;
-                        box-shadow: 0 3px 14px #0f172a12;
-                        padding: 22px;
-                        margin-bottom: 20px;
+                .member-card,.team-card,.archive {
+			background:#111827d9;border:1px solid #334155;border-radius:18px;box-shadow:0 18px 50px #0005;margin-bottom:16px;backdrop-filter:blur(18px);
                 }
+		.add-card{padding:0}.add-card>summary,.team-card>summary,.archive>summary{cursor:pointer;list-style:none;padding:20px;display:flex;align-items:center;justify-content:space-between;gap:16px}.add-card>summary::-webkit-details-marker,.team-card>summary::-webkit-details-marker,.archive>summary::-webkit-details-marker,.member-card>summary::-webkit-details-marker{display:none}.add-card[open]>summary,.team-card[open]>summary,.archive[open]>summary{border-bottom:1px solid #334155}.add-card form{padding:20px}.team-members{padding:16px}.open-label{color:#93c5fd;font-weight:800;font-size:13px}.archive{margin-top:28px}.archive>p{padding:0 20px}.archive>.member-card{margin:12px 20px}.team-card small{display:block;color:#94a3b8;margin-top:4px}
 
                 .member-title {
                         display: flex;
                         justify-content: space-between;
                         align-items: start;
-                        margin-bottom: 18px;
+			margin:0;padding:17px 20px;cursor:pointer;list-style:none;
                 }
+		.member-form{padding:0 20px 20px;border-top:1px solid #273449}
 
                 .status {
                         padding: 5px 10px;
@@ -380,13 +387,11 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                 }
 
                 .active {
-                        background: #dcfce7;
-                        color: #166534;
+			background:#1e3a8a;color:#bfdbfe;
                 }
 
                 .inactive {
-                        background: #e5e7eb;
-                        color: #475569;
+			background:#3f3f46;color:#e4e4e7;
                 }
 
                 .form-grid {
@@ -399,21 +404,21 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                 label {
                         display: grid;
                         gap: 6px;
-                        color: #334155;
+			color:#cbd5e1;
                         font-size: 14px;
                 }
 
                 input,
                 select {
                         width:  100%;
-                        border: 1px solid #cbd5e1;
+			border:1px solid #475569;
                         border-radius: 8px;
                         padding: 10px;
-                        background: white;
+			background:#0b1220;color:#f8fafc;
                 }
 
                 fieldset {
-                        border: 1px solid #e2e8f0;
+			border:1px solid #334155;
                         border-radius: 10px;
                         margin: 18px 0;
                 }
@@ -443,13 +448,13 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                         border-radius: 9px;
                         padding: 11px 16px;
                         color: white;
-                        background: #1769aa;
+			background:linear-gradient(135deg,#2563eb,#7c3aed);
                         font-weight: 700;
                         cursor: pointer;
                 }
 
                 .privacy {
-                        color: #64748b;
+			color:#94a3b8;
                         font-size: 13px;
                 }
 
@@ -503,7 +508,7 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                         </details>
                 </section>
 
-                <form method="post" class="add-card">
+		<details class="add-card"><summary><strong>＋ Add new team member</strong><span class="open-label">Open form</span></summary><form method="post">
                         <input
                                 type="hidden"
                                 name="action"
@@ -574,9 +579,10 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                         <button type="submit">
                                 Add member
                         </button>
-                </form>
+                </form></details>
 
                 ${cards}
+		${archive}
 
                 <p class="privacy">
                         Private management page. Phone numbers are never
