@@ -9,7 +9,7 @@ const PASSWORD_ITERATIONS = 100_000;
 interface SessionPrincipal {
 	userId: number;
 	tenantId: number;
-	role: 'admin' | 'portfolio_leader' | 'project_manager';
+	role: 'admin' | 'ceo' | 'portfolio_leader' | 'project_manager' | 'team_lead';
 }
 
 function html(value: unknown): string {
@@ -99,7 +99,7 @@ async function validSession(request: Request, env: WorkerEnv): Promise<SessionPr
 	const userId = Number(userText);
 	const tenantId = Number(tenantText);
 	const expires = Number(expiresText);
-	if (!Number.isSafeInteger(userId) || userId <= 0 || !Number.isSafeInteger(tenantId) || tenantId <= 0 || !['admin', 'portfolio_leader', 'project_manager'].includes(roleText) || !Number.isSafeInteger(expires) || expires <= Math.floor(Date.now() / 1000)) return null;
+	if (!Number.isSafeInteger(userId) || userId <= 0 || !Number.isSafeInteger(tenantId) || tenantId <= 0 || !['admin', 'ceo', 'portfolio_leader', 'project_manager', 'team_lead'].includes(roleText) || !Number.isSafeInteger(expires) || expires <= Math.floor(Date.now() / 1000)) return null;
 	const payload = `${userText}.${tenantText}.${roleText}.${expiresText}`;
 	return safeEqual(suppliedSignature, await signature(payload, secret)) ? { userId, tenantId, role: roleText as SessionPrincipal['role'] } : null;
 }
@@ -165,7 +165,7 @@ export async function loginResponse(request: Request, env: WorkerEnv): Promise<R
 		principal = { userId: 1, tenantId: 1, role: 'admin' };
 	} else {
 		const account = await env.DB.prepare(`
-			SELECT user.id, user.tenant_id, user.tenant_role, account.password_hash, account.password_salt
+			SELECT user.id, user.tenant_id, COALESCE(user.workops_role, user.tenant_role) AS tenant_role, account.password_hash, account.password_salt
 			FROM management_users AS user
 			INNER JOIN management_accounts AS account ON account.management_user_id = user.id
 			WHERE lower(user.email) = ? AND user.active = 1 AND account.activated_at IS NOT NULL

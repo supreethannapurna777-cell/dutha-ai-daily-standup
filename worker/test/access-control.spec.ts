@@ -102,6 +102,29 @@ describe('tenant and project access foundation', () => {
 		expect((await accessibleProjects(env.DB, principal)).map((p) => p.id)).toEqual([alphaProject]);
 	});
 
+	it('lets a CEO see every project in their own tenant only', async () => {
+		const alpha = await createTenant('CEO Alpha');
+		const beta = await createTenant('CEO Beta');
+		const first = await createProject(alpha, 'CEO-A1');
+		const second = await createProject(alpha, 'CEO-A2');
+		const other = await createProject(beta, 'CEO-B1');
+		const principal = { userId: 999, tenantId: alpha, role: 'ceo' as const };
+		expect((await accessibleProjects(env.DB, principal)).map((project) => project.id)).toEqual([first, second]);
+		expect(await canAccessProject(env.DB, principal, other)).toBe(false);
+	});
+
+	it('limits a Team Lead to the assigned project and department', async () => {
+		const tenantId = await createTenant('Lead Alpha');
+		const first = await createProject(tenantId, 'LEAD-A1');
+		const second = await createProject(tenantId, 'LEAD-A2');
+		const lead = await env.DB.prepare(`INSERT INTO management_users (tenant_id, external_subject, display_name, tenant_role, workops_role) VALUES (?, 'team-lead', 'Team Lead', 'project_manager', 'team_lead') RETURNING id`).bind(tenantId).first<{ id:number }>();
+		if (!lead) throw new Error('Lead was not created.');
+		await env.DB.prepare(`INSERT INTO team_lead_assignments (project_id, management_user_id, department) VALUES (?, ?, 'Engineering')`).bind(first, lead.id).run();
+		const principal = { userId: lead.id, tenantId, role: 'team_lead' as const };
+		expect((await accessibleProjects(env.DB, principal)).map((project) => project.id)).toEqual([first]);
+		expect(await canAccessProject(env.DB, principal, second)).toBe(false);
+	});
+
 	it('accepts only trusted, complete management identity headers', () => {
 		const request = new Request('https://example.com/dashboard', {
 			headers: {

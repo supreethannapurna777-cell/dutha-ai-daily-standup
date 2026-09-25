@@ -1,6 +1,6 @@
 import type { WorkerEnv } from './env';
 import { duthaThemeCss, themeButton, themeScriptTag } from './ui';
-import { accessibleProjects, managementPrincipalFromRequest, requireProjectAccess } from './access-control';
+import { accessibleProjects, managementPrincipalFromRequest, requireProjectAccess, teamLeadDepartment } from './access-control';
 import { getLocalScheduleDetails } from './scheduler';
 
 interface DashboardRow {
@@ -92,7 +92,7 @@ function formatReceivedAt(value: string | null, timezone: string): string {
 	});
 }
 
-async function getDashboardRows(db: D1Database, tenantId: number, projectId: number): Promise<DashboardRow[]> {
+async function getDashboardRows(db: D1Database, tenantId: number, projectId: number, department: string | null = null): Promise<DashboardRow[]> {
 	const result = await db
 		.prepare(
 			`
@@ -125,6 +125,7 @@ async function getDashboardRows(db: D1Database, tenantId: number, projectId: num
                                         = incoming.id
                         WHERE member.active = 1
                                 AND member.tenant_id = ?
+								AND (? IS NULL OR member.department = ?)
                                 AND (
                                         member.primary_project_id = ?
                                         OR EXISTS (
@@ -137,19 +138,20 @@ async function getDashboardRows(db: D1Database, tenantId: number, projectId: num
                         ORDER BY member.name
                         `,
 		)
-		.bind(projectId, tenantId, projectId, projectId)
+		.bind(projectId, tenantId, department, department, projectId, projectId)
 		.all<DashboardRow>();
 
 	return result.results;
 }
 
-async function getOpenCaseCount(db: D1Database, tenantId: number, projectId: number): Promise<number> {
+async function getOpenCaseCount(db: D1Database, tenantId: number, projectId: number, department: string | null = null): Promise<number> {
 	const result = await db
 		.prepare(
 			`
                         SELECT COUNT(*) AS count
                         FROM coordination_cases
                         WHERE tenant_id = ? AND project_id = ?
+						AND (? IS NULL OR requester_member_id IN (SELECT id FROM team_members WHERE tenant_id=? AND department=?))
                         AND status NOT IN (
                                 'resolved',
                                 'rejected',
@@ -157,7 +159,7 @@ async function getOpenCaseCount(db: D1Database, tenantId: number, projectId: num
                         )
                         `,
 		)
-		.bind(tenantId, projectId)
+		.bind(tenantId, projectId, department, tenantId, department)
 		.first<{ count: number }>();
 
 	return result?.count ?? 0;
@@ -195,7 +197,7 @@ async function getVoiceUpdateCounts(
 	};
 }
 
-async function getHistoryRows(db: D1Database, tenantId: number, projectId: number): Promise<HistoryRow[]> {
+async function getHistoryRows(db: D1Database, tenantId: number, projectId: number, department: string | null = null): Promise<HistoryRow[]> {
 	const result = await db
 		.prepare(
 			`
@@ -210,8 +212,9 @@ async function getHistoryRows(db: D1Database, tenantId: number, projectId: numbe
                         ON member.phone = incoming.sender_phone
                 LEFT JOIN processed_updates AS processed
                         ON processed.message_id = incoming.id
-                WHERE member.active = 1
+                        WHERE member.active = 1
                         AND member.tenant_id = ?
+						AND (? IS NULL OR member.department = ?)
                         AND incoming.tenant_id = ?
                         AND incoming.project_id = ?
                         AND incoming.processing_status = 'processed'
@@ -219,7 +222,7 @@ async function getHistoryRows(db: D1Database, tenantId: number, projectId: numbe
                 LIMIT 500
         `,
 		)
-		.bind(tenantId, tenantId, projectId)
+		.bind(tenantId, department, department, tenantId, projectId)
 		.all<HistoryRow>();
 	return result.results;
 }
@@ -324,9 +327,13 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 	};
 	const roleProfile = principal.role === 'admin'
 		? { eyebrow: 'ORGANISATION CONTROL', title: 'Executive command center', copy: 'Organisation-wide operational visibility and integration control.', focus: 'Organisation readiness' }
-		: principal.role === 'portfolio_leader'
+		: principal.role === 'ceo'
+			? { eyebrow: 'CHIEF EXECUTIVE VIEW', title: 'Company command center', copy: 'Organisation-wide delivery health, signals and follow-through.', focus: 'Company readiness' }
+			: principal.role === 'portfolio_leader'
 			? { eyebrow: 'PORTFOLIO CONTROL', title: 'Portfolio command center', copy: 'See delivery health across the projects you lead.', focus: 'Portfolio readiness' }
-			: { eyebrow: 'PROJECT CONTROL', title: 'Project command center', copy: 'Focus on today’s team signals, blockers and follow-through.', focus: 'Project readiness' };
+			: principal.role === 'team_lead'
+				? { eyebrow: 'TEAM CONTROL', title: 'Team command center', copy: 'Focus on your team’s updates, blockers and follow-through.', focus: 'Team readiness' }
+				: { eyebrow: 'PROJECT CONTROL', title: 'Project command center', copy: 'Focus on today’s team signals, blockers and follow-through.', focus: 'Project readiness' };
 	const requestedProject = Number(new URL(request.url).searchParams.get('project') ?? 1);
 	if (!Number.isSafeInteger(requestedProject) || requestedProject <= 0) {
 		return new Response('Invalid project.', { status: 400 });
@@ -337,6 +344,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 		return new Response('Project access denied.', { status: 403 });
 	}
 	const projects = await accessibleProjects(env.DB, principal);
+	const leadDepartment = await teamLeadDepartment(env.DB, principal, requestedProject);
 	const projectOptions = projects.map((project) => `
 		<option value="${project.id}" ${project.id === requestedProject ? 'selected' : ''}>
 			${escapeHtml(project.project_key)} · ${escapeHtml(project.name)}
@@ -344,13 +352,13 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 	`).join('');
 
 	if (new URL(request.url).searchParams.get('view') === 'history') {
-		return historyResponse(await getHistoryRows(env.DB, principal.tenantId, requestedProject), request, now, requestedProject);
+		return historyResponse(await getHistoryRows(env.DB, principal.tenantId, requestedProject, leadDepartment), request, now, requestedProject);
 	}
 
 	const [databaseRows, openCases, voiceCounts] = await Promise.all([
-		getDashboardRows(env.DB, principal.tenantId, requestedProject),
-		getOpenCaseCount(env.DB, principal.tenantId, requestedProject),
-		getVoiceUpdateCounts(env.DB, principal.tenantId, requestedProject),
+		getDashboardRows(env.DB, principal.tenantId, requestedProject, leadDepartment),
+		getOpenCaseCount(env.DB, principal.tenantId, requestedProject, leadDepartment),
+		leadDepartment ? Promise.resolve({ awaiting: 0, failed: 0 }) : getVoiceUpdateCounts(env.DB, principal.tenantId, requestedProject),
 	]);
 
 	const rows: PreparedDashboardRow[] = databaseRows.map((row) => ({
@@ -659,14 +667,14 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                                         <button type="submit">Open project</button>
                                 </form>` : ''}
 
-                                <a href="/dashboard/members?project=${requestedProject}">${principal.role === 'project_manager' ? 'Manage team' : 'Manage project'}</a>
+								${principal.role === 'team_lead' ? '' : `<a href="/dashboard/members?project=${requestedProject}">${principal.role === 'project_manager' ? 'Manage team' : 'Manage project'}</a>`}
 
-                                <a
+								${principal.role === 'team_lead' ? '' : `<a
                                         class="cases"
                                         href="/dashboard/cases?project=${requestedProject}"
                                 >
                                         Needs action
-                                </a>
+                                </a>`}
 
                                 <a href="/dashboard?view=history&amp;period=7&amp;project=${requestedProject}">
                                         History

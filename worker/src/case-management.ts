@@ -1714,6 +1714,9 @@ export async function caseManagementResponse(request: Request, env: WorkerEnv, f
 		tenantId: 1,
 		role: 'admin' as const,
 	};
+	// Case management can change cross-team coordination. Team Leads remain on
+	// their department-scoped dashboard until a scoped case workflow is added.
+	if (principal.role === 'team_lead') return new Response('Team Lead access is available from the team dashboard.', { status: 403 });
 	const projectId = Number(new URL(request.url).searchParams.get('project') ?? 1);
 	if (!Number.isSafeInteger(projectId) || projectId <= 0) {
 		return new Response('Invalid project.', { status: 400 });

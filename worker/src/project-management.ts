@@ -82,7 +82,7 @@ async function data(db: D1Database, tenantId: number): Promise<{
                         FROM projects WHERE tenant_id = ? ORDER BY active DESC, name
                 `).bind(tenantId).all<ProjectRow>(),
                 db.prepare(`
-                        SELECT user.id, user.display_name, user.email, user.tenant_role,
+                        SELECT user.id, user.display_name, user.email, COALESCE(user.workops_role, user.tenant_role) AS tenant_role,
                                 GROUP_CONCAT(membership.project_id) AS project_ids
                         FROM management_users AS user
                         LEFT JOIN project_memberships AS membership
@@ -126,6 +126,12 @@ function assignmentForm(
                         ${isAssigned ? "Remove" : "Assign"}
                 </button>
         </form>`;
+}
+
+function teamLeadSelector(projectId: number, department: string, managers: ManagerRow[]): string {
+	const leads = managers.filter((manager) => manager.tenant_role === 'team_lead');
+	if (leads.length === 0) return '<small>Add a Team Lead to assign this team.</small>';
+	return `<form method="post" class="inline"><input type="hidden" name="action" value="assign_team_lead"><input type="hidden" name="project_id" value="${projectId}"><input type="hidden" name="department" value="${escapeHtml(department)}"><select name="management_user_id"><option value="">No lead</option>${leads.map((lead) => `<option value="${lead.id}">${escapeHtml(lead.display_name)}</option>`).join('')}</select><button class="assign" type="submit">Set lead</button></form>`;
 }
 
 interface TeamGroup {
@@ -190,6 +196,7 @@ function page(
 			const modalId = `confirm-team-${project.id}-${index}`;
 			return `<tr><td><strong>${escapeHtml(team.department)}</strong><small>${assignedCount} of ${team.members.length} assigned</small></td><td class="inline">
 				${fullyAssigned ? '<span class="complete">Assigned</span>' : `<a class="button assign" href="#${modalId}">Assign team</a>`}
+				${teamLeadSelector(project.id, team.department, managers)}
 				${fullyAssigned ? "" : confirmationModal(modalId, "Assign entire team?", `Assign all ${team.members.length} active members of ${team.department} to ${project.name}?`, "add_team", project.id, team.department)}
 			</td></tr>`;
 		}).join("");
@@ -209,7 +216,7 @@ function page(
 </style></head><body><main><header><div><h1>Projects and access</h1><div class="muted">Create projects and control who can see each one.</div></div><a class="top" href="/dashboard">Return to dashboard</a></header>
 ${message ? `<div class="notice">${escapeHtml(message)}</div>` : ""}${activationUrl ? `<div class="notice"><strong>Secure activation link (valid for 24 hours):</strong><code>${escapeHtml(activationUrl)}</code><p>Send this privately to the manager. Creating another link revokes this one.</p></div>` : ''}${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
 <details class="create"><summary><strong>＋ Add project or management user</strong><span class="muted"> Keep setup controls out of the daily workspace</span></summary><h2>Create project</h2><form method="post" class="create-grid"><input type="hidden" name="action" value="create_project"><label>Project key<input name="project_key" maxlength="20" placeholder="CLIENT-OPS" required></label><label>Project name<input name="name" maxlength="100" required></label><button type="submit">Create project</button></form>
-<form method="post" class="manager-form"><input type="hidden" name="action" value="create_manager"><h2>Add management user</h2><div class="manager-grid"><label>Name<input name="display_name" maxlength="100" required></label><label>Work email<input name="email" type="email" maxlength="254" required></label><label>Role<select name="tenant_role"><option value="project_manager">Project manager</option><option value="portfolio_leader">Portfolio leader</option><option value="admin">Administrator</option></select></label><button type="submit">Add user</button></div></form></details>
+<form method="post" class="manager-form"><input type="hidden" name="action" value="create_manager"><h2>Add management user</h2><div class="manager-grid"><label>Name<input name="display_name" maxlength="100" required></label><label>Work email<input name="email" type="email" maxlength="254" required></label><label>Role<select name="tenant_role"><option value="project_manager">Project manager</option><option value="team_lead">Team lead</option><option value="portfolio_leader">Portfolio leader</option><option value="ceo">CEO</option><option value="admin">Administrator</option></select></label><button type="submit">Add user</button></div></form></details>
 ${cards || '<section class="project">No projects configured.</section>'}</main></body></html>`;
 }
 
@@ -244,20 +251,20 @@ async function mutate(
                 }
                 return null;
         }
-        if (action === "create_manager") {
+		if (action === "create_manager") {
                 const displayName = String(form.get("display_name") ?? "").trim();
                 const email = String(form.get("email") ?? "").trim().toLowerCase();
                 const role = String(form.get("tenant_role") ?? "");
-                if (!displayName || displayName.length > 100 || !["admin", "portfolio_leader", "project_manager"].includes(role)) {
+			if (!displayName || displayName.length > 100 || !["admin", "ceo", "portfolio_leader", "project_manager", "team_lead"].includes(role)) {
                         return "Enter a valid management user and role.";
                 }
                 if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return "Enter a valid email address.";
                 const subject = email || `pending-${crypto.randomUUID()}`;
                 try {
                         await env.DB.prepare(`
-                                INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role)
-                                VALUES (?, ?, ?, ?, ?)
-                        `).bind(actor.tenantId, subject, displayName, email || null, role).run();
+				INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role, workops_role)
+				VALUES (?, ?, ?, ?, ?, ?)
+			`).bind(actor.tenantId, subject, displayName, email || null, role === 'ceo' ? 'portfolio_leader' : role === 'team_lead' ? 'project_manager' : role, ['ceo', 'team_lead'].includes(role) ? role : null).run();
                 } catch {
                         return "That management user already exists.";
                 }
@@ -290,6 +297,21 @@ async function mutate(
                         await env.DB.prepare(`DELETE FROM team_member_projects WHERE project_id = ? AND team_member_id = ?`)
                                 .bind(projectId, memberId).run();
                 }
+		return null;
+	}
+	if (action === 'assign_team_lead') {
+		const userId = Number(form.get('management_user_id'));
+		const department = String(form.get('department') ?? '').trim();
+		if (!department || department.length > 100) return 'Team was not found.';
+		const team = await env.DB.prepare(`SELECT 1 AS found FROM team_members WHERE tenant_id=? AND active=1 AND department=? LIMIT 1`).bind(actor.tenantId, department).first<{ found:number }>();
+		if (!team?.found) return 'Team was not found.';
+		if (!userId) {
+			await env.DB.prepare(`DELETE FROM team_lead_assignments WHERE project_id=? AND department=?`).bind(projectId, department).run();
+			return null;
+		}
+		const lead = await env.DB.prepare(`SELECT 1 AS found FROM management_users WHERE id=? AND tenant_id=? AND active=1 AND workops_role='team_lead' LIMIT 1`).bind(userId, actor.tenantId).first<{found:number}>();
+		if (!lead?.found) return 'Team Lead was not found.';
+		await env.DB.prepare(`INSERT INTO team_lead_assignments (project_id, management_user_id, department) VALUES (?, ?, ?) ON CONFLICT(project_id, management_user_id) DO UPDATE SET department=excluded.department`).bind(projectId, userId, department).run();
 		return null;
 	}
 	if (action === "add_team") {
@@ -358,9 +380,9 @@ async function managerActivation(
 		const displayName = String(form.get("display_name") ?? "").trim();
 		const email = String(form.get("email") ?? "").trim().toLowerCase();
 		const role = String(form.get("tenant_role") ?? "");
-		if (!displayName || displayName.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["admin", "portfolio_leader", "project_manager"].includes(role)) return render(request, env, actor, "Enter a valid name, work email and role.");
+		if (!displayName || displayName.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !["admin", "ceo", "portfolio_leader", "project_manager", "team_lead"].includes(role)) return render(request, env, actor, "Enter a valid name, work email and role.");
 		try {
-			const created = await env.DB.prepare(`INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role) VALUES (?, ?, ?, ?, ?) RETURNING id`).bind(actor.tenantId, email, displayName, email, role).first<{ id:number }>();
+			const created = await env.DB.prepare(`INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role, workops_role) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`).bind(actor.tenantId, email, displayName, email, role === 'ceo' ? 'portfolio_leader' : role === 'team_lead' ? 'project_manager' : role, ['ceo', 'team_lead'].includes(role) ? role : null).first<{ id:number }>();
 			if (!created) return render(request, env, actor, "Management user could not be created.");
 			managerId = created.id;
 			managerEmail = email;

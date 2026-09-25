@@ -802,6 +802,9 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 		tenantId: 1,
 		role: 'admin' as const,
 	};
+	// Team Leads have a department-scoped, read-only dashboard. Do not send
+	// them to this all-member editor until its mutations are equally scoped.
+	if (principal.role === 'team_lead') return new Response('Team Lead access is available from the team dashboard.', { status: 403 });
 	const projectId = Number(new URL(request.url).searchParams.get('project') ?? 1);
 	if (!Number.isSafeInteger(projectId) || projectId <= 0) {
 		return new Response('Invalid project.', { status: 400 });
