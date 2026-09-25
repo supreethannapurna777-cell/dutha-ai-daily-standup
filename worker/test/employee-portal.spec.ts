@@ -101,8 +101,11 @@ describe('employee portal', () => {
 		expect(html).toContain('<svg');
 		expect(html).toContain('Scan this QR code');
 		expect(html).toMatch(/JOIN [A-Z0-9]{10} employee@example\.com/);
-		const invite = await env.DB.prepare(`SELECT max_uses FROM enrolment_invites WHERE project_id=1 ORDER BY id DESC LIMIT 1`).first<{ max_uses:number }>();
+		const invite = await env.DB.prepare(`SELECT max_uses, created_by_management_user_id, created_by_team_member_id, tenant_id FROM enrolment_invites WHERE project_id=1 ORDER BY id DESC LIMIT 1`).first<{ max_uses:number; created_by_management_user_id:number|null; created_by_team_member_id:number|null; tenant_id:number }>();
 		expect(invite?.max_uses).toBe(1);
+		expect(invite?.created_by_management_user_id).toBeNull();
+		expect(invite?.created_by_team_member_id).toBe(memberId);
+		expect(invite?.tenant_id).toBe(1);
 	});
 
 	it('opens WhatsApp directly with the JOIN message on mobile', async () => {

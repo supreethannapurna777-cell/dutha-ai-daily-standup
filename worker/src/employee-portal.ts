@@ -157,7 +157,7 @@ async function dashboardResponse(request: Request, env: WorkerEnv, memberId: num
 			const businessNumber = (env.WHATSAPP_BUSINESS_NUMBER ?? '').replace(/\D/g, '');
 			if (!businessNumber) return new Response('WhatsApp connection is not configured.', { status: 503 });
 			const code = generateEnrolmentCode();
-			await env.DB.prepare(`INSERT INTO enrolment_invites (tenant_id, project_id, created_by_management_user_id, code_hash, expires_at, max_uses) VALUES (?, ?, 1, ?, ?, 1)`).bind(member.tenant_id, member.primary_project_id, await hashEnrolmentCode(code), new Date(Date.now()+30*60*1000).toISOString()).run();
+			await env.DB.prepare(`INSERT INTO enrolment_invites (tenant_id, project_id, created_by_team_member_id, code_hash, expires_at, max_uses) VALUES (?, ?, ?, ?, ?, 1)`).bind(member.tenant_id, member.primary_project_id, member.id, await hashEnrolmentCode(code), new Date(Date.now()+30*60*1000).toISOString()).run();
 			const message = `JOIN ${code} ${member.email}`;
 			const whatsappUrl = `https://wa.me/${businessNumber}?text=${encodeURIComponent(message)}`;
 			if (!/Android|iPhone|iPad|iPod|Mobile/i.test(request.headers.get('User-Agent') ?? '')) {
