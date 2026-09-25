@@ -230,6 +230,14 @@ export function sendAvailabilityRequest(
 	optionsText: string,
 	fetcher: Fetcher = fetch,
 ): Promise<SendResult> {
+	// Meta rejects line breaks, tabs, and long runs of spaces inside a
+	// template parameter (#132018). Keep the options readable but pass them
+	// as one safe body value.
+	const safeOptionsText = optionsText
+		.replace(/[\r\n\t]+/g, " | ")
+		.replace(/ {2,}/g, " ")
+		.trim();
+
 	return sendTemplateMessage(
 		env,
 		member.phone,
@@ -237,7 +245,7 @@ export function sendAvailabilityRequest(
 		[
 			member.name,
 			String(caseId),
-			optionsText,
+			safeOptionsText,
 			String(caseId),
 		],
 		fetcher,

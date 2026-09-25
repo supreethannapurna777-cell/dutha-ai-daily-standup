@@ -105,7 +105,7 @@ describe("WhatsApp template sending", () => {
 		).toEqual([
 			"Supreeth",
 			"42",
-			"1. 15 Jan 2030, 1:00 pm\n2. 15 Jan 2030, 2:00 pm",
+			"1. 15 Jan 2030, 1:00 pm | 2. 15 Jan 2030, 2:00 pm",
 			"42",
 		]);
 	});
