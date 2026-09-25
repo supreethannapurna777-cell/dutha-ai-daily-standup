@@ -315,6 +315,9 @@ describe("manager coordination case controls", () => {
                 const filteredHtml = await filtered.text();
 
                 expect(filteredHtml).toContain("Filter cases");
+			expect(filteredHtml).toContain("Needs attention");
+			expect(filteredHtml).toContain("Latest first");
+			expect(filteredHtml).toContain("Oldest first");
                 expect(filteredHtml).toContain("1 active");
                 expect(filteredHtml).toContain("Showing <strong>0</strong> of 1 cases");
                 expect(filteredHtml).not.toContain("<h2>Blocked by configuration</h2>");

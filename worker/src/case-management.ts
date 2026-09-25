@@ -578,7 +578,7 @@ function readFilters(url: URL): CaseFilters {
 		quick: value('quick'), search: value('search'), requester: value('requester'), owner: value('owner'),
 		status: value('status'), priority: value('priority'), type: value('type'),
 		resolution: value('resolution'), age: value('age'), sla: value('sla'),
-		duration: value('duration'), sort: value('sort') || 'priority',
+		duration: value('duration'), sort: value('sort') || 'attention',
 	};
 }
 
@@ -604,6 +604,24 @@ function filteredCases(cases: CaseRow[], filters: CaseFilters): CaseRow[] {
 		if (filters.sort === 'oldest') return new Date(a.requested_at).getTime() - new Date(b.requested_at).getTime();
 		if (filters.sort === 'newest') return new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime();
 		if (filters.sort === 'sla') return (a.sla_due_at ? new Date(a.sla_due_at).getTime() : Infinity) - (b.sla_due_at ? new Date(b.sla_due_at).getTime() : Infinity);
+		if (filters.sort === 'attention') {
+			const statusRank: Record<string, number> = {
+				pending_approval: 0,
+				pending_assignment: 1,
+				approved: 2,
+				availability_requested: 3,
+				time_agreed: 4,
+				scheduled: 5,
+				in_progress: 6,
+				resolved: 8,
+				rejected: 9,
+				cancelled: 10,
+			};
+			const priorityRank: Record<string, number> = { critical: 0, high: 1, normal: 2, low: 3 };
+			return (statusRank[a.status] ?? 7) - (statusRank[b.status] ?? 7)
+				|| (priorityRank[a.priority] ?? 4) - (priorityRank[b.priority] ?? 4)
+				|| new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime();
+		}
 		const rank: Record<string, number> = { critical: 0, high: 1, normal: 2, low: 3 };
 		return (rank[a.priority] ?? 4) - (rank[b.priority] ?? 4);
 	});
@@ -940,6 +958,10 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
 				.count-pill { min-width:28px; height:28px; display:grid; place-items:center; border-radius:8px; background:#eff6ff; color:#1769aa; font-weight:800; }
 				.case-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:18px 0; }
 				.case-toolbar p { margin:0; }
+				.sort-control { display:flex; align-items:end; gap:8px; margin-left:auto; }
+				.sort-control label { display:grid; gap:4px; color:#52647a; font-size:12px; font-weight:700; }
+				.sort-control select { min-width:150px; border:1px solid #cbd5e1; border-radius:8px; padding:9px; background:white; }
+				.sort-control button { background:#1769aa; padding:10px 13px; }
 
                 @media (max-width: 800px) {
                         body {
@@ -1038,12 +1060,12 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
 							<label>Case age<select name="age">${selectOptions([['today','Today'],['7','Last 7 days'],['30','Last 30 days'],['older','Older than 30 days']], filters.age)}</select></label>
 							<label>SLA<select name="sla">${selectOptions([['on_track','On track'],['due_soon','Due soon'],['overdue','Overdue']], filters.sla)}</select></label>
 							<label>Meeting duration<select name="duration">${selectOptions([...allowedDurations].map((duration) => [String(duration), `${duration} minutes`] as [string, string]), filters.duration)}</select></label>
-							<label>Sort by<select name="sort">${[['priority','Priority'],['newest','Newest'],['oldest','Oldest'],['sla','SLA deadline']].map(([value,label]) => `<option value="${value}" ${filters.sort === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+							<label>Sort by<select name="sort">${[['attention','Needs attention'],['newest','Latest first'],['oldest','Oldest first'],['priority','Priority'],['sla','SLA deadline']].map(([value,label]) => `<option value="${value}" ${filters.sort === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
 							<div class="filter-actions"><button class="apply" type="submit">Apply filters</button><a class="clear" href="/dashboard/cases?project=${projectId}&amp;view=cases">Clear</a></div>
 						</form>
 					</aside>
 				</details>
-				<div class="case-toolbar"><span class="filter-trigger">☰ Filters${activeFilterCount ? ` · ${activeFilterCount} active` : ''}</span><p>Showing <strong>${visibleCases.length}</strong> of ${cases.length} cases</p></div>
+				<div class="case-toolbar"><span class="filter-trigger">☰ Filters${activeFilterCount ? ` · ${activeFilterCount} active` : ''}</span><p>Showing <strong>${visibleCases.length}</strong> of ${cases.length} cases</p><form class="sort-control" method="get" action="/dashboard/cases"><input type="hidden" name="project" value="${projectId}"><input type="hidden" name="view" value="cases"><label>Order<select name="sort">${[['attention','Needs attention'],['newest','Latest first'],['oldest','Oldest first'],['priority','Priority'],['sla','SLA deadline']].map(([value,label]) => `<option value="${value}" ${filters.sort === value ? 'selected' : ''}>${label}</option>`).join('')}</select></label><button type="submit">Apply</button></form></div>
 				${cards}
 				`}
         </main>
