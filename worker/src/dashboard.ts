@@ -1,6 +1,6 @@
 import type { WorkerEnv } from './env';
 import { duthaThemeCss, themeButton, themeScriptTag } from './ui';
-import { accessibleProjects, managementPrincipalFromRequest, requireProjectAccess, teamLeadDepartment } from './access-control';
+import { accessibleProjects, managementPrincipalFromRequest, requireProjectAccess, teamLeadDepartment, type AccessibleProject, type ManagementPrincipal } from './access-control';
 import { getLocalScheduleDetails } from './scheduler';
 
 interface DashboardRow {
@@ -21,6 +21,16 @@ interface PreparedDashboardRow extends DashboardRow {
 
 interface HistoryRow extends DashboardRow {
 	original_reply: string | null;
+}
+
+interface PortfolioProjectRow {
+	id: number;
+	project_key: string;
+	name: string;
+	members: number;
+	reported_today: number;
+	active_blockers: number;
+	open_cases: number;
 }
 
 function escapeHtml(value: unknown): string {
@@ -306,6 +316,34 @@ function displayedValue(row: PreparedDashboardRow, value: string | null): string
 	return value || 'Not specified';
 }
 
+async function portfolioRows(db: D1Database, tenantId: number, projectIds: number[], now: Date): Promise<PortfolioProjectRow[]> {
+	if (!projectIds.length) return [];
+	const placeholders = projectIds.map(() => '?').join(',');
+	const result = await db.prepare(`
+                SELECT project.id, project.project_key, project.name,
+                        COUNT(DISTINCT member.id) AS members,
+                        SUM(CASE WHEN incoming.received_at >= ? THEN 1 ELSE 0 END) AS reported_today,
+                        SUM(CASE WHEN lower(COALESCE(processed.blockers, '')) NOT IN ('', 'none', 'none mentioned', 'not specified', 'no', 'nil') THEN 1 ELSE 0 END) AS active_blockers,
+                        (SELECT COUNT(*) FROM coordination_cases AS cases WHERE cases.project_id=project.id AND cases.tenant_id=project.tenant_id AND cases.status NOT IN ('resolved','rejected','cancelled')) AS open_cases
+                FROM projects AS project
+                LEFT JOIN team_members AS member ON member.tenant_id=project.tenant_id AND member.active=1
+                    AND (member.primary_project_id=project.id OR EXISTS (SELECT 1 FROM team_member_projects AS assignment WHERE assignment.project_id=project.id AND assignment.team_member_id=member.id))
+                LEFT JOIN incoming_messages AS incoming ON incoming.id=(SELECT candidate.id FROM incoming_messages AS candidate WHERE candidate.tenant_id=member.tenant_id AND candidate.project_id=project.id AND candidate.sender_phone=member.phone ORDER BY candidate.received_at DESC LIMIT 1)
+                LEFT JOIN processed_updates AS processed ON processed.message_id=incoming.id
+                WHERE project.tenant_id=? AND project.active=1 AND project.id IN (${placeholders})
+                GROUP BY project.id ORDER BY open_cases DESC, active_blockers DESC, project.name
+        `).bind(new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString(), tenantId, ...projectIds).all<PortfolioProjectRow>();
+	return result.results;
+}
+
+async function organisationOverviewResponse(db: D1Database, principal: ManagementPrincipal, projects: AccessibleProject[], now: Date): Promise<Response> {
+	const rows = await portfolioRows(db, principal.tenantId, projects.map((project) => project.id), now);
+	const totals = rows.reduce((total, row) => ({ members: total.members + row.members, reported: total.reported + row.reported_today, blockers: total.blockers + row.active_blockers, cases: total.cases + row.open_cases }), { members: 0, reported: 0, blockers: 0, cases: 0 });
+	const tableRows = rows.map((row) => `<tr><td><strong>${escapeHtml(row.project_key)}</strong><small>${escapeHtml(row.name)}</small></td><td>${row.members ? Math.round(row.reported_today / row.members * 100) : 0}%<small>${row.reported_today}/${row.members} reported</small></td><td class="${row.active_blockers ? 'risk' : ''}">${row.active_blockers}</td><td class="${row.open_cases ? 'risk' : ''}">${row.open_cases}</td><td><a href="/dashboard?project=${row.id}">Open project →</a></td></tr>`).join('') || '<tr><td colspan="5">No accessible projects.</td></tr>';
+	const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Company command center · Dutha</title><style>:root{font-family:Inter,Arial,sans-serif;color:#e2e8f0;background:#070b18}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:32px;background:radial-gradient(circle at 5% 0,#1e3a8a 0,transparent 35%),radial-gradient(circle at 95% 0,#312e81 0,transparent 31%),#070b18}main{max-width:1180px;margin:auto}.top{display:flex;justify-content:space-between;gap:18px;align-items:start;margin-bottom:25px}.eyebrow{color:#93c5fd;font-size:11px;letter-spacing:.13em;font-weight:900}h1{margin:6px 0;color:#f8fafc}.muted,small{color:#94a3b8}.back{color:#bfdbfe;padding:10px 13px;background:#172554;border-radius:10px;text-decoration:none;font-weight:800}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}.metric,.table{background:#111827d9;border:1px solid #334155;border-radius:17px;box-shadow:0 18px 50px #0007}.metric{padding:19px}.metric small{display:block}.metric strong{display:block;font-size:31px;margin-top:8px;color:#f8fafc}.table{overflow:auto}table{width:100%;border-collapse:collapse;min-width:700px}th,td{padding:16px;text-align:left;border-bottom:1px solid #273449}th{color:#93c5fd;font-size:12px;text-transform:uppercase;letter-spacing:.08em}td small{display:block;margin-top:4px}td a{color:#bfdbfe}.risk{color:#fda4af;font-weight:900}@media(max-width:760px){body{padding:17px}.top{flex-direction:column}.metrics{grid-template-columns:repeat(2,1fr)}}</style></head><body><main><header class="top"><div><div class="eyebrow">${principal.role === 'ceo' ? 'CHIEF EXECUTIVE VIEW' : 'ORGANISATION CONTROL'}</div><h1>Company command center</h1><p class="muted">Delivery exceptions, ownership signals and project readiness—not surveillance.</p></div><a class="back" href="/dashboard?project=${projects[0]?.id ?? 1}">Project dashboard</a></header><section class="metrics"><div class="metric"><small>Active projects</small><strong>${rows.length}</strong></div><div class="metric"><small>Stand-up coverage</small><strong>${totals.members ? Math.round(totals.reported / totals.members * 100) : 0}%</strong></div><div class="metric"><small>Open blockers</small><strong>${totals.blockers}</strong></div><div class="metric"><small>Open coordination cases</small><strong>${totals.cases}</strong></div></section><section class="table"><table><thead><tr><th>Project</th><th>Coverage</th><th>Blockers</th><th>Cases</th><th></th></tr></thead><tbody>${tableRows}</tbody></table></section></main></body></html>`;
+	return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'" } });
+}
+
 export async function createDashboardResponse(request: Request, env: WorkerEnv, now = new Date()): Promise<Response> {
 	if (!env.DASHBOARD_USERNAME || !env.DASHBOARD_PASSWORD) {
 		return new Response('Dashboard authentication is not configured.', { status: 503 });
@@ -345,6 +383,9 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 	}
 	const projects = await accessibleProjects(env.DB, principal);
 	const leadDepartment = await teamLeadDepartment(env.DB, principal, requestedProject);
+	if (new URL(request.url).searchParams.get('view') === 'overview' && ['admin', 'ceo', 'portfolio_leader'].includes(principal.role)) {
+		return organisationOverviewResponse(env.DB, principal, projects, now);
+	}
 	const projectOptions = projects.map((project) => `
 		<option value="${project.id}" ${project.id === requestedProject ? 'selected' : ''}>
 			${escapeHtml(project.project_key)} · ${escapeHtml(project.name)}
@@ -675,6 +716,8 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                                 >
                                         Needs action
                                 </a>`}
+
+								${['admin', 'ceo', 'portfolio_leader'].includes(principal.role) ? '<a href="/dashboard?view=overview">Company view</a>' : ''}
 
                                 <a href="/dashboard?view=history&amp;period=7&amp;project=${requestedProject}">
                                         History

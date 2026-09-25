@@ -320,7 +320,7 @@ describe("secure timezone-aware dashboard", () => {
                 expect(html.match(/<tr>/g)).toHaveLength(2);
         });
 
-        it("labels response and expected completion clearly", async () => {
+	it("labels response and expected completion clearly", async () => {
                 const response = await createDashboardResponse(
                         authorisedRequest(), dashboardEnv,
                         new Date("2026-09-11T09:00:00.000Z"),
@@ -328,6 +328,26 @@ describe("secure timezone-aware dashboard", () => {
                 const html = await response.text();
                 expect(html).toContain("Team updates today");
                 expect(html).toContain("Expected completion");
-                expect(html).toContain("History");
-        });
+		expect(html).toContain("History");
+	});
+
+	it("renders a company command center for a CEO without exposing phone numbers", async () => {
+		const response = await createDashboardResponse(
+			new Request("https://example.com/dashboard?view=overview", {
+				headers: {
+					...Object.fromEntries(authorisedRequest().headers),
+					"X-Dutha-User-Id": "1",
+					"X-Dutha-Tenant-Id": "1",
+					"X-Dutha-Tenant-Role": "ceo",
+				},
+			}),
+			dashboardEnv,
+			new Date("2026-09-11T09:00:00.000Z"),
+		);
+		const html = await response.text();
+		expect(response.status).toBe(200);
+		expect(html).toContain("Company command center");
+		expect(html).toContain("Open coordination cases");
+		expect(html).not.toContain("919100000000");
+	});
 });
