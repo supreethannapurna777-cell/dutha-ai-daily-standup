@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './env';
-import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
+import { managementPrincipalFromRequest, requireProjectAccess, teamLeadDepartment, type ManagementPrincipal } from './access-control';
 import { createEmployeeActivation } from './employee-portal';
 import { runProjectInitialNow } from './scheduler';
 
@@ -110,7 +110,7 @@ function normaliseWorkingDays(form: FormData): string | null {
 	return ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].filter((day) => uniqueDays.includes(day)).join(',');
 }
 
-async function getMembers(db: D1Database, tenantId: number, projectId: number): Promise<ManagedMember[]> {
+async function getMembers(db: D1Database, tenantId: number, projectId: number, departmentScope: string | null = null): Promise<ManagedMember[]> {
 	const result = await db
 		.prepare(
 			`
@@ -127,6 +127,7 @@ async function getMembers(db: D1Database, tenantId: number, projectId: number): 
                                 scheduling_enabled
                         FROM team_members
                         WHERE tenant_id = ?
+                                AND (? IS NULL OR department = ?)
                                 AND (
                                         primary_project_id = ?
                                         OR EXISTS (
@@ -138,7 +139,7 @@ async function getMembers(db: D1Database, tenantId: number, projectId: number): 
                         ORDER BY name
                         `,
 		)
-		.bind(tenantId, projectId, projectId)
+		.bind(tenantId, departmentScope, departmentScope, projectId, projectId)
 		.all<ManagedMember>();
 
 	return result.results;
@@ -599,12 +600,13 @@ async function renderManagementPage(
 	principal: ManagementPrincipal,
 	projectId: number,
 	error: string | null = null,
+	departmentScope: string | null = null,
 ): Promise<Response> {
 	if (!isAuthorised(request, env)) {
 		return authenticationRequired();
 	}
 
-	const members = await getMembers(env.DB, principal.tenantId, projectId);
+	const members = await getMembers(env.DB, principal.tenantId, projectId, departmentScope);
 	const params = new URL(request.url).searchParams;
 	const updated = params.get('updated');
 	const activationToken = params.get('activation');
@@ -628,10 +630,10 @@ interface AddMemberResult {
 	activationToken?: string;
 }
 
-async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number): Promise<AddMemberResult> {
+async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number, departmentScope: string | null = null): Promise<AddMemberResult> {
 	const name = String(form.get('name') ?? '').trim();
 
-	const department = String(form.get('department') ?? '').trim();
+	const department = departmentScope ?? String(form.get('department') ?? '').trim();
 
 	const phone = String(form.get('phone') ?? '').replace(/\D/g, '');
 	const email = String(form.get('email') ?? '').trim().toLowerCase();
@@ -708,7 +710,7 @@ async function addMember(form: FormData, env: WorkerEnv, principal: ManagementPr
 	}
 }
 
-async function updateMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number): Promise<string | null> {
+async function updateMember(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number, departmentScope: string | null = null): Promise<string | null> {
 	const memberId = Number(form.get('member_id'));
 
 	const timezone = String(form.get('timezone') ?? '');
@@ -760,6 +762,7 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
                                 active = ?,
                                 scheduling_enabled = ?
                         WHERE id = ? AND tenant_id = ?
+                                AND (? IS NULL OR department = ?)
                                 AND (
                                         primary_project_id = ?
                                         OR EXISTS (
@@ -780,6 +783,8 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
 			schedulingEnabled,
 			memberId,
 			principal.tenantId,
+			departmentScope,
+			departmentScope,
 			projectId,
 			projectId,
 		)
@@ -802,9 +807,6 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 		tenantId: 1,
 		role: 'admin' as const,
 	};
-	// Team Leads have a department-scoped, read-only dashboard. Do not send
-	// them to this all-member editor until its mutations are equally scoped.
-	if (principal.role === 'team_lead') return new Response('Team Lead access is available from the team dashboard.', { status: 403 });
 	const projectId = Number(new URL(request.url).searchParams.get('project') ?? 1);
 	if (!Number.isSafeInteger(projectId) || projectId <= 0) {
 		return new Response('Invalid project.', { status: 400 });
@@ -814,9 +816,11 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 	} catch {
 		return new Response('Project access denied.', { status: 403 });
 	}
+	const departmentScope = await teamLeadDepartment(env.DB, principal, projectId);
+	if (principal.role === 'team_lead' && !departmentScope) return new Response('Team Lead assignment was not found.', { status: 403 });
 
 	if (request.method === 'GET') {
-		return renderManagementPage(request, env, principal, projectId);
+		return renderManagementPage(request, env, principal, projectId, null, departmentScope);
 	}
 
 	if (request.method !== 'POST') {
@@ -839,7 +843,7 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 	let redirectValue: string;
 
 	if (action === 'add') {
-		const result = await addMember(form, env, principal, projectId);
+		const result = await addMember(form, env, principal, projectId, departmentScope);
 		error = result.error;
 		redirectValue = 'added';
 		if (!error && result.activationToken) {
@@ -852,10 +856,13 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 			});
 		}
 	} else if (action === 'update') {
-		error = await updateMember(form, env, principal, projectId);
+		error = await updateMember(form, env, principal, projectId, departmentScope);
 		redirectValue = 'member';
 	} else if (action === 'send_now') {
-		if (env.AUTOMATION_ENABLED !== 'true') {
+		if (departmentScope !== null) {
+			error = 'Team Leads can manage their team schedule, but sending a whole-project broadcast requires a Project Manager.';
+			redirectValue = '';
+		} else if (env.AUTOMATION_ENABLED !== 'true') {
 			error = 'Automation is globally paused. No messages were sent.';
 			redirectValue = '';
 		} else {
@@ -873,7 +880,7 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 	}
 
 	if (error) {
-		return renderManagementPage(request, env, principal, projectId, error);
+		return renderManagementPage(request, env, principal, projectId, error, departmentScope);
 	}
 
 	return new Response(null, {

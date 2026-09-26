@@ -102,7 +102,7 @@ describe("member schedule management", () => {
                 existingMemberId = inserted.id;
         });
 
-        it("requires dashboard authentication", async () => {
+	it("requires dashboard authentication", async () => {
                 const response =
                         await memberManagementResponse(
                                 new Request(
@@ -117,7 +117,30 @@ describe("member schedule management", () => {
                                 "WWW-Authenticate",
                         ),
                 ).toContain("Basic");
-        });
+	});
+
+	it("limits a Team Lead to the assigned department and prevents cross-team schedule edits", async () => {
+		const other = await env.DB.prepare("INSERT INTO team_members (name, phone, department) VALUES ('Other Lead Team', '919199999999', 'Engineering') RETURNING id").first<{ id:number }>();
+		const lead = await env.DB.prepare("INSERT INTO management_users (tenant_id, external_subject, display_name, tenant_role, workops_role) VALUES (1, 'lead-scope@example.com', 'Scoped Lead', 'project_manager', 'team_lead') RETURNING id").first<{ id:number }>();
+		if (!other || !lead) throw new Error('Test records were not created.');
+		await env.DB.prepare("INSERT INTO team_lead_assignments (project_id, management_user_id, department) VALUES (1, ?, 'Management')").bind(lead.id).run();
+		const scoped = authorisedRequest();
+		scoped.headers.set('X-Dutha-User-Id', String(lead.id));
+		scoped.headers.set('X-Dutha-Tenant-Id', '1');
+		scoped.headers.set('X-Dutha-Tenant-Role', 'team_lead');
+		const page = await memberManagementResponse(scoped, managementEnv);
+		const html = await page.text();
+		expect(page.status).toBe(200);
+		expect(html).toContain('Supreeth');
+		expect(html).not.toContain('Other Lead Team');
+		const update = authorisedRequest('POST', new URLSearchParams({ action:'update', member_id:String(other.id), timezone:'Asia/Kolkata', initial_time:'09:00', reminder_1_time:'10:00', reminder_2_time:'11:00', working_days:'MON' }));
+		update.headers.set('X-Dutha-User-Id', String(lead.id));
+		update.headers.set('X-Dutha-Tenant-Id', '1');
+		update.headers.set('X-Dutha-Tenant-Role', 'team_lead');
+		const rejected = await memberManagementResponse(update, managementEnv);
+		expect(rejected.status).toBe(400);
+		expect(await rejected.text()).toContain('Team member was not found.');
+	});
 
         it("never displays stored phone numbers", async () => {
                 const response =
