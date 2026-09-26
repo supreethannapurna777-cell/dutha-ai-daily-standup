@@ -727,6 +727,8 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 
 								${principal.role === 'team_lead' ? `<a href="/dashboard/members?project=${requestedProject}">Manage team</a>` : `<a href="/dashboard/members?project=${requestedProject}">${principal.role === 'project_manager' ? 'Manage team' : 'Manage project'}</a>`}
 
+								${principal.role === 'team_lead' ? `<a class="cases" href="/dashboard/cases?project=${requestedProject}">Raise blocker</a>` : ''}
+
 								${principal.role === 'team_lead' ? '' : `<a
                                         class="cases"
                                         href="/dashboard/cases?project=${requestedProject}"

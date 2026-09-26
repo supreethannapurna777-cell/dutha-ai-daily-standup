@@ -248,7 +248,7 @@ describe("manager coordination case controls", () => {
                 caseId = coordinationCase.id;
         });
 
-        it("requires authentication", async () => {
+	it("requires authentication", async () => {
                 const response =
                         await caseManagementResponse(
                                 new Request(
@@ -257,8 +257,25 @@ describe("manager coordination case controls", () => {
                                 caseEnv,
                         );
 
-                expect(response.status).toBe(401);
-        });
+		expect(response.status).toBe(401);
+	});
+
+	it("lets a Team Lead raise a pending case only for their assigned department", async () => {
+		const lead = await env.DB.prepare("INSERT INTO management_users (tenant_id, external_subject, display_name, tenant_role, workops_role) VALUES (1, 'case-lead@example.com', 'Case Lead', 'project_manager', 'team_lead') RETURNING id").first<{ id:number }>();
+		if (!lead) throw new Error("Team Lead was not created.");
+		await env.DB.prepare("INSERT INTO team_lead_assignments (project_id, management_user_id, department) VALUES (1, ?, 'Management')").bind(lead.id).run();
+		const body = new URLSearchParams({ requester_member_id: String(requesterId), case_type: 'blocker', priority: 'high', issue_summary: 'Deployment credentials are unavailable for the planned release.' });
+		const response = await caseManagementResponse(new Request("https://example.com/dashboard/cases?project=1", { method: 'POST', headers: { Authorization: authorisation(), Origin: 'https://example.com', 'Content-Type': 'application/x-www-form-urlencoded', 'X-Dutha-User-Id': String(lead.id), 'X-Dutha-Tenant-Id': '1', 'X-Dutha-Tenant-Role': 'team_lead' }, body }), caseEnv);
+		expect(response.status).toBe(303);
+		expect(response.headers.get('Location')).toBe('/dashboard/cases?project=1&created=1');
+		const stored = await env.DB.prepare("SELECT status, priority, requester_member_id, issue_summary FROM coordination_cases WHERE issue_summary = ?").bind('Deployment credentials are unavailable for the planned release.').first<{ status:string; priority:string; requester_member_id:number; issue_summary:string }>();
+		expect(stored).toEqual({ status: 'pending_assignment', priority: 'high', requester_member_id: requesterId, issue_summary: 'Deployment credentials are unavailable for the planned release.' });
+		const managerView = await caseManagementResponse(new Request('https://example.com/dashboard/cases?source=team_lead', { headers: { Authorization: authorisation() } }), caseEnv);
+		const managerHtml = await managerView.text();
+		expect(managerHtml).toContain('Team Lead escalation');
+		expect(managerHtml).toContain('Deployment credentials are unavailable for the planned release.');
+		expect(managerHtml).not.toContain('<h2>Blocked by configuration</h2>');
+	});
 
         it("shows cases without phone numbers", async () => {
                 const response =

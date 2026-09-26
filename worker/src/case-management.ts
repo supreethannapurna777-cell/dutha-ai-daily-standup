@@ -1,5 +1,5 @@
 import type { WorkerEnv } from './env';
-import { managementPrincipalFromRequest, requireProjectAccess, type ManagementPrincipal } from './access-control';
+import { managementPrincipalFromRequest, requireProjectAccess, teamLeadDepartment, type ManagementPrincipal } from './access-control';
 import { sendMeetingScheduled, type Fetcher } from './whatsapp';
 import { jiraConfigFromEnv, syncApprovedCaseToJira } from './jira-sync';
 import { atlassianMcpConfigFromEnv } from './atlassian-mcp';
@@ -33,6 +33,7 @@ interface CaseRow {
 	meeting_notifications_submitted: number;
 	meeting_notifications_delivered: number;
 	meeting_notifications_failed: number;
+	raised_by_team_lead: number;
 }
 
 interface MemberOption {
@@ -146,7 +147,12 @@ async function getCases(db: D1Database, tenantId: number, projectId: number): Pr
 				COALESCE((SELECT COUNT(*) FROM sent_messages AS failed
 					WHERE failed.message_type = 'meeting_notification'
 						AND failed.scheduled_for = ('case:' || coordination.id || ':meeting')
-						AND failed.status = 'failed'), 0) AS meeting_notifications_failed
+						AND failed.status = 'failed'), 0) AS meeting_notifications_failed,
+				CASE WHEN EXISTS (
+					SELECT 1 FROM case_events AS event
+					WHERE event.case_id = coordination.id
+						AND event.event_type = 'case_raised_by_team_lead'
+				) THEN 1 ELSE 0 END AS raised_by_team_lead
                         FROM coordination_cases
                                 AS coordination
                         INNER JOIN team_members
@@ -261,10 +267,11 @@ function caseCard(coordinationCase: CaseRow, members: MemberOption[]): string {
                                         <span class="badge status">
                                                 ${escapeHtml(formatStatus(coordinationCase.status))}
                                         </span>
-                                        <span class="badge lifecycle">
-                                                ${escapeHtml(formatStatus(coordinationCase.resolution_state))}
-                                        </span>
-                                </div>
+										<span class="badge lifecycle">
+											${escapeHtml(formatStatus(coordinationCase.resolution_state))}
+										</span>
+										${coordinationCase.raised_by_team_lead ? '<span class="badge status">Team Lead escalation</span>' : ''}
+									</div>
                         </div>
 
                         <div class="case-details">
@@ -549,6 +556,7 @@ interface CaseFilters {
 	age: string;
 	sla: string;
 	duration: string;
+	source: string;
 	sort: string;
 }
 
@@ -578,7 +586,7 @@ function readFilters(url: URL): CaseFilters {
 		quick: value('quick'), search: value('search'), requester: value('requester'), owner: value('owner'),
 		status: value('status'), priority: value('priority'), type: value('type'),
 		resolution: value('resolution'), age: value('age'), sla: value('sla'),
-		duration: value('duration'), sort: value('sort') || 'attention',
+		duration: value('duration'), source: value('source'), sort: value('sort') || 'attention',
 	};
 }
 
@@ -597,6 +605,7 @@ function filteredCases(cases: CaseRow[], filters: CaseFilters): CaseRow[] {
 			&& (!filters.type || item.case_type === filters.type)
 			&& (!filters.resolution || item.resolution_state === filters.resolution)
 			&& (!filters.duration || String(item.meeting_duration_minutes) === filters.duration)
+			&& (!filters.source || (filters.source === 'team_lead' && item.raised_by_team_lead === 1) || (filters.source === 'automated' && item.raised_by_team_lead !== 1))
 			&& (!filters.age || (filters.age === 'today' ? age === 0 : filters.age === '7' ? age <= 7 : filters.age === '30' ? age <= 30 : age > 30))
 			&& (!filters.sla || (filters.sla === 'overdue' ? overdue : filters.sla === 'due_soon' ? Boolean(item.sla_due_at && !overdue && new Date(item.sla_due_at).getTime() - now <= 86_400_000) : !overdue));
 	});
@@ -1047,6 +1056,7 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
 							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;quick=overdue">Overdue</a>
 							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;quick=awaiting_verification">Awaiting verification</a>
 							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;quick=resolved">Resolved</a>
+							<a href="/dashboard/cases?project=${projectId}&amp;view=cases&amp;source=team_lead">Team Lead escalations</a>
 						</div>
 						<form method="get" action="/dashboard/cases">
 							<input type="hidden" name="project" value="${projectId}"><input type="hidden" name="view" value="cases">
@@ -1056,6 +1066,7 @@ function page(cases: CaseRow[], members: MemberOption[], message: string | null,
 							<label>Status<select name="status">${selectOptions(unique(cases.map((item) => item.status)), filters.status)}</select></label>
 							<label>Priority<select name="priority">${selectOptions(unique(cases.map((item) => item.priority)), filters.priority)}</select></label>
 							<label>Case type<select name="type">${selectOptions(unique(cases.map((item) => item.case_type)), filters.type)}</select></label>
+							<label>Case source<select name="source">${selectOptions([['team_lead','Team Lead escalation'],['automated','Automated / standard workflow']], filters.source)}</select></label>
 							<label>Resolution state<select name="resolution">${selectOptions(unique(cases.map((item) => item.resolution_state)), filters.resolution)}</select></label>
 							<label>Case age<select name="age">${selectOptions([['today','Today'],['7','Last 7 days'],['30','Last 30 days'],['older','Older than 30 days']], filters.age)}</select></label>
 							<label>SLA<select name="sla">${selectOptions([['on_track','On track'],['due_soon','Due soon'],['overdue','Overdue']], filters.sla)}</select></label>
@@ -1704,6 +1715,53 @@ async function processDecision(
 	};
 }
 
+async function teamLeadMembers(db: D1Database, tenantId: number, projectId: number, department: string): Promise<MemberOption[]> {
+	const result = await db.prepare(`
+		SELECT member.id, member.name, member.department
+		FROM team_members AS member
+		WHERE member.tenant_id = ? AND member.active = 1 AND member.department = ?
+			AND (member.primary_project_id = ? OR EXISTS (
+				SELECT 1 FROM team_member_projects AS membership
+				WHERE membership.team_member_id = member.id AND membership.project_id = ?
+			))
+		ORDER BY member.name
+	`).bind(tenantId, department, projectId, projectId).all<MemberOption>();
+	return result.results;
+}
+
+function teamLeadEscalationPage(members: MemberOption[], projectId: number, department: string, message: string | null, error: string | null): Response {
+	const options = members.map((member) => `<option value="${member.id}">${escapeHtml(member.name)}</option>`).join('');
+	const banner = message ? `<div class="notice">${escapeHtml(message)}</div>` : error ? `<div class="error">${escapeHtml(error)}</div>` : '';
+	const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Raise blocker · Dutha WorkOps</title><style>:root{font-family:Inter,Arial,sans-serif;color:#e2e8f0;background:#070b18}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:30px;background:radial-gradient(circle at 8% 0,#1e3a8a 0,transparent 35%),radial-gradient(circle at 94% 0,#312e81 0,transparent 31%),#070b18}main{max-width:720px;margin:auto}.head{display:flex;justify-content:space-between;gap:16px;align-items:start;margin-bottom:22px}.eyebrow{color:#93c5fd;font-size:11px;letter-spacing:.12em;font-weight:900}h1,h2{color:#f8fafc;margin:6px 0}.muted{color:#94a3b8}.card{background:#111827d9;border:1px solid #334155;border-radius:17px;padding:22px;box-shadow:0 18px 50px #0007}.notice,.error{padding:13px 15px;border-radius:12px;margin:0 0 16px}.notice{background:#0f3a56;color:#dbeafe}.error{background:#4c1d2a;color:#fecdd3}label{display:block;margin:15px 0 6px;font-weight:800}input,select,textarea{width:100%;padding:12px;border:1px solid #475569;border-radius:10px;background:#0f172a;color:#f8fafc;font:inherit}textarea{min-height:130px;resize:vertical}button,.back{display:inline-block;margin-top:18px;padding:11px 14px;border:0;border-radius:10px;background:linear-gradient(135deg,#2563eb,#7c3aed);color:white;font-weight:800;text-decoration:none;cursor:pointer}.back{background:#172554;margin-top:0}.hint{margin-top:16px;padding:12px;border-left:3px solid #60a5fa;background:#0f172a;color:#cbd5e1}@media(max-width:700px){body{padding:16px}.head{flex-direction:column}}</style></head><body><main><header class="head"><div><div class="eyebrow">TEAM ESCALATION</div><h1>Raise a blocker for review</h1><p class="muted">${escapeHtml(department)} team · Project ${projectId}</p></div><a class="back" href="/dashboard?project=${projectId}">Team dashboard</a></header>${banner}<section class="card"><h2>Manager review required</h2><p class="muted">This creates a pending case for the Project Manager. It does not contact anyone or schedule a meeting.</p>${members.length ? `<form method="post"><label>Affected team member<select name="requester_member_id" required><option value="">Select team member</option>${options}</select></label><label>Case type<select name="case_type"><option value="blocker">Blocker</option><option value="dependency">Dependency</option><option value="coordination">Coordination need</option></select></label><label>Priority<select name="priority"><option value="normal">Normal</option><option value="high">High</option><option value="critical">Critical</option></select></label><label>What needs attention<textarea name="issue_summary" maxlength="500" required placeholder="State the blocker, affected work and what decision or support is needed."></textarea></label><button type="submit">Submit for manager review</button></form>` : `<p class="muted">There are no active members in your assigned team for this project.</p>`}<p class="hint">Only the ${escapeHtml(department)} team can be selected. The Project Manager retains responsibility for assignment, approval and any later coordination.</p></section></main></body></html>`;
+	return htmlResponse(html, error ? 400 : 200);
+}
+
+async function teamLeadEscalationResponse(request: Request, env: WorkerEnv, principal: ManagementPrincipal, projectId: number): Promise<Response> {
+	const department = await teamLeadDepartment(env.DB, principal, projectId);
+	if (!department) return new Response('Team Lead assignment was not found.', { status: 403 });
+	const members = await teamLeadMembers(env.DB, principal.tenantId, projectId, department);
+	if (request.method === 'GET') return teamLeadEscalationPage(members, projectId, department, new URL(request.url).searchParams.get('created') === '1' ? 'Blocker submitted for Project Manager review.' : null, null);
+	if (request.method !== 'POST') return new Response('Method not allowed.', { status: 405, headers: { Allow: 'GET, POST' } });
+	if (!validOrigin(request)) return new Response('Invalid request origin.', { status: 403 });
+	const form = await request.formData();
+	const requesterId = Number(form.get('requester_member_id'));
+	const caseType = String(form.get('case_type') ?? '');
+	const priority = String(form.get('priority') ?? '');
+	const summary = String(form.get('issue_summary') ?? '').trim();
+	if (!Number.isSafeInteger(requesterId) || !members.some((member) => member.id === requesterId)) return teamLeadEscalationPage(members, projectId, department, null, 'Choose an active member from your own team.');
+	if (!['blocker', 'dependency', 'coordination'].includes(caseType) || !['normal', 'high', 'critical'].includes(priority) || summary.length < 12 || summary.length > 500) return teamLeadEscalationPage(members, projectId, department, null, 'Provide a clear case type, priority and a 12–500 character summary.');
+	const requester = members.find((member) => member.id === requesterId)!;
+	const reference = crypto.randomUUID();
+	const incoming = await env.DB.prepare(`INSERT INTO incoming_messages (whatsapp_message_id, received_at, sender_name, sender_phone, original_reply, processing_status, tenant_id, project_id) VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, 'confirmed', ?, ?) RETURNING id`).bind(`manual-lead-${reference}`, requester.name, `manual-lead-${reference}`, summary, principal.tenantId, projectId).first<{ id: number }>();
+	if (!incoming) return teamLeadEscalationPage(members, projectId, department, null, 'The escalation could not be recorded.');
+	const processed = await env.DB.prepare(`INSERT INTO processed_updates (message_id, sender_name, blockers, dependencies, original_reply, processing_status, tenant_id, project_id) VALUES (?, ?, ?, ?, ?, 'confirmed', ?, ?) RETURNING id`).bind(incoming.id, requester.name, summary, 'Raised by Team Lead for manager review.', summary, principal.tenantId, projectId).first<{ id: number }>();
+	if (!processed) return teamLeadEscalationPage(members, projectId, department, null, 'The escalation could not be prepared for review.');
+	const created = await env.DB.prepare(`INSERT INTO coordination_cases (source_update_id, requester_member_id, case_type, issue_summary, status, priority, tenant_id, project_id) VALUES (?, ?, ?, ?, 'pending_assignment', ?, ?, ?) RETURNING id`).bind(processed.id, requester.id, caseType, summary, priority, principal.tenantId, projectId).first<{ id: number }>();
+	if (!created) return teamLeadEscalationPage(members, projectId, department, null, 'The coordination case could not be created.');
+	await env.DB.prepare(`INSERT INTO case_events (case_id, event_type, actor_type, details) VALUES (?, 'case_raised_by_team_lead', 'manager', ?)`).bind(created.id, `Raised by Team Lead ${principal.userId} for ${department}.`).run();
+	return new Response(null, { status: 303, headers: { Location: `/dashboard/cases?project=${projectId}&created=1` } });
+}
+
 export async function caseManagementResponse(request: Request, env: WorkerEnv, fetcher: Fetcher = fetch): Promise<Response> {
 	if (!isAuthorised(request, env)) {
 		return authenticationRequired();
@@ -1714,9 +1772,6 @@ export async function caseManagementResponse(request: Request, env: WorkerEnv, f
 		tenantId: 1,
 		role: 'admin' as const,
 	};
-	// Case management can change cross-team coordination. Team Leads remain on
-	// their department-scoped dashboard until a scoped case workflow is added.
-	if (principal.role === 'team_lead') return new Response('Team Lead access is available from the team dashboard.', { status: 403 });
 	const projectId = Number(new URL(request.url).searchParams.get('project') ?? 1);
 	if (!Number.isSafeInteger(projectId) || projectId <= 0) {
 		return new Response('Invalid project.', { status: 400 });
@@ -1725,6 +1780,9 @@ export async function caseManagementResponse(request: Request, env: WorkerEnv, f
 		await requireProjectAccess(env.DB, principal, projectId);
 	} catch {
 		return new Response('Project access denied.', { status: 403 });
+	}
+	if (principal.role === 'team_lead') {
+		return teamLeadEscalationResponse(request, env, principal, projectId);
 	}
 
 	if (request.method === 'GET') {

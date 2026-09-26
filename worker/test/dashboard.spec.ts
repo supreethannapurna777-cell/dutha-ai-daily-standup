@@ -379,6 +379,7 @@ describe("secure timezone-aware dashboard", () => {
 		expect(html).toContain("Team command center");
 		expect(html).toContain("Team brief");
 		expect(html).toContain("Manage team");
+		expect(html).toContain("Raise blocker");
 		expect(html).not.toContain("Needs action");
 	});
 });
