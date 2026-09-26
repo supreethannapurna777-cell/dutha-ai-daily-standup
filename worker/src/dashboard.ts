@@ -316,6 +316,16 @@ function displayedValue(row: PreparedDashboardRow, value: string | null): string
 	return value || 'Not specified';
 }
 
+function deliveryBriefResponse(rows: PreparedDashboardRow[], openCases: number, projectId: number, role: string): Response {
+	const missing = rows.filter((row) => !row.respondedToday);
+	const blockers = rows.filter((row) => row.respondedToday && isActiveBlocker(row.blockers));
+	const list = (items: PreparedDashboardRow[], text: (row: PreparedDashboardRow) => string, empty: string) => items.length
+		? '<ul>' + items.map((row) => '<li><strong>' + escapeHtml(row.name) + '</strong><small>' + escapeHtml(row.department) + '</small><p>' + escapeHtml(text(row)) + '</p></li>').join('') + '</ul>'
+		: '<p class="empty">' + empty + '</p>';
+	const html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Delivery brief · Dutha</title><style>:root{font-family:Inter,Arial,sans-serif;color:#e2e8f0;background:#070b18}*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:30px;background:radial-gradient(circle at 8% 0,#1e3a8a 0,transparent 35%),radial-gradient(circle at 94% 0,#312e81 0,transparent 31%),#070b18}main{max-width:1100px;margin:auto}.head{display:flex;justify-content:space-between;gap:16px;align-items:start;margin-bottom:22px}.eyebrow{color:#93c5fd;font-size:11px;letter-spacing:.12em;font-weight:900}h1,h2{color:#f8fafc;margin:6px 0}.muted,small{color:#94a3b8}.back{padding:10px 13px;background:#172554;color:#bfdbfe;border-radius:10px;text-decoration:none;font-weight:800}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px}.metric,.section{background:#111827d9;border:1px solid #334155;border-radius:17px;box-shadow:0 18px 50px #0007}.metric{padding:18px}.metric strong{display:block;font-size:30px;margin-top:6px}.section{padding:20px;margin-top:16px}.section h2{font-size:18px}.section ul{padding:0;margin:0;list-style:none}.section li{padding:13px 0;border-bottom:1px solid #273449}.section li:last-child{border:0}.section p{margin:5px 0 0;color:#cbd5e1}.section a{color:#bfdbfe;font-weight:800}.empty{color:#94a3b8}@media(max-width:700px){body{padding:16px}.head{flex-direction:column}.summary{grid-template-columns:1fr}}</style></head><body><main><header class="head"><div><div class="eyebrow">' + (role === 'team_lead' ? 'TEAM DELIVERY BRIEF' : 'PROJECT DELIVERY BRIEF') + '</div><h1>What needs attention</h1><p class="muted">Exceptions, ownership and next actions—without a productivity ranking.</p></div><a class="back" href="/dashboard?project=' + projectId + '">Project dashboard</a></header><section class="summary"><div class="metric"><small>Missing updates</small><strong>' + missing.length + '</strong></div><div class="metric"><small>Active blockers</small><strong>' + blockers.length + '</strong></div><div class="metric"><small>Open coordination cases</small><strong>' + openCases + '</strong></div></section><section class="section"><h2>Blockers requiring follow-up</h2>' + list(blockers,(row) => row.blockers || 'Blocker reported.','No active blockers reported today.') + '</section><section class="section"><h2>Updates still missing</h2>' + list(missing,() => 'No stand-up received today.','Everyone in scope has reported today.') + '</section><section class="section"><h2>Next action</h2><p><a href="/dashboard/cases?project=' + projectId + '">Open coordination queue →</a></p><p><a href="/dashboard/members?project=' + projectId + '">Open team schedules →</a></p></section></main></body></html>';
+	return new Response(html,{headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Frame-Options':'DENY','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"}});
+}
+
 async function portfolioRows(db: D1Database, tenantId: number, projectIds: number[], now: Date): Promise<PortfolioProjectRow[]> {
 	if (!projectIds.length) return [];
 	const placeholders = projectIds.map(() => '?').join(',');
@@ -412,6 +422,10 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 	const received = rows.filter((row) => row.respondedToday).length;
 
 	const blockers = rows.filter((row) => row.respondedToday && isActiveBlocker(row.blockers)).length;
+
+	if (new URL(request.url).searchParams.get('view') === 'brief') {
+		return deliveryBriefResponse(rows, openCases, requestedProject, principal.role);
+	}
 
 	const tableRows = rows.length
 		? rows

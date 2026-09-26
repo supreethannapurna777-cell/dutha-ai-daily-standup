@@ -350,4 +350,17 @@ describe("secure timezone-aware dashboard", () => {
 		expect(html).toContain("Open coordination cases");
 		expect(html).not.toContain("919100000000");
 	});
+
+	it("renders a project delivery brief with only operational exceptions", async () => {
+		const response = await createDashboardResponse(
+			new Request("https://example.com/dashboard?view=brief", { headers: authorisedRequest().headers }),
+			dashboardEnv,
+			new Date("2026-09-11T09:00:00.000Z"),
+		);
+		const html = await response.text();
+		expect(response.status).toBe(200);
+		expect(html).toContain("What needs attention");
+		expect(html).toContain("Missing updates");
+		expect(html).toContain("Open coordination cases");
+	});
 });
