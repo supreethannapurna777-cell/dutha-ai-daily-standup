@@ -722,7 +722,10 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                                         <button type="submit">Open project</button>
                                 </form>` : ''}
 
-								${principal.role === 'team_lead' ? '' : `<a href="/dashboard/members?project=${requestedProject}">${principal.role === 'project_manager' ? 'Manage team' : 'Manage project'}</a>`}
+
+								<a href="/dashboard?view=brief&amp;project=${requestedProject}">${principal.role === 'team_lead' ? 'Team brief' : 'Delivery brief'}</a>
+
+								${principal.role === 'team_lead' ? `<a href="/dashboard/members?project=${requestedProject}">Manage team</a>` : `<a href="/dashboard/members?project=${requestedProject}">${principal.role === 'project_manager' ? 'Manage team' : 'Manage project'}</a>`}
 
 								${principal.role === 'team_lead' ? '' : `<a
                                         class="cases"

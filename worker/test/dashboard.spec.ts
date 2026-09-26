@@ -363,4 +363,22 @@ describe("secure timezone-aware dashboard", () => {
 		expect(html).toContain("Missing updates");
 		expect(html).toContain("Open coordination cases");
 	});
+
+	it("gives a Team Lead direct links to their scoped team actions", async () => {
+		const lead = await env.DB.prepare("INSERT INTO management_users (tenant_id, external_subject, display_name, tenant_role, workops_role) VALUES (1, 'dashboard-lead@example.com', 'Dashboard Lead', 'project_manager', 'team_lead') RETURNING id").first<{ id:number }>();
+		if (!lead) throw new Error("Team Lead was not created.");
+		await env.DB.prepare("INSERT INTO team_lead_assignments (project_id, management_user_id, department) VALUES (1, ?, 'Management')").bind(lead.id).run();
+		const request = authorisedRequest();
+		request.headers.set("X-Dutha-User-Id", String(lead.id));
+		request.headers.set("X-Dutha-Tenant-Id", "1");
+		request.headers.set("X-Dutha-Tenant-Role", "team_lead");
+
+		const response = await createDashboardResponse(request, dashboardEnv, new Date("2026-09-11T09:00:00.000Z"));
+		const html = await response.text();
+		expect(response.status).toBe(200);
+		expect(html).toContain("Team command center");
+		expect(html).toContain("Team brief");
+		expect(html).toContain("Manage team");
+		expect(html).not.toContain("Needs action");
+	});
 });
