@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const expectedMigrations = Array.from({ length: 21 }, (_, index) => String(index + 1).padStart(4, "0"));
+const expectedMigrations = Array.from({ length: 22 }, (_, index) => String(index + 1).padStart(4, "0"));
 const migrations = readdirSync(new URL("../migrations", import.meta.url))
         .filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
 const errors = [];
