@@ -12,6 +12,7 @@ import {
         getIstDate,
         getLocalScheduleDetails,
         isIstWeekday,
+        runDepartmentInitialNow,
         runProjectInitialNow,
         runScheduledAction,
 } from "../src/scheduler";
@@ -48,6 +49,7 @@ function schedulerEnv(
 
 
 interface MemberOptions {
+	department?: string;
         timezone?: string;
         workingDays?: string;
         initialTime?: string;
@@ -82,7 +84,7 @@ async function insertMember(
                 .bind(
                         name,
                         phone,
-                        "Development",
+				options.department ?? "Development",
                         options.timezone
                                 ?? "Asia/Kolkata",
                         options.workingDays
@@ -312,6 +314,19 @@ describe("timezone-aware scheduled automation", () => {
 
                 expect(first).toEqual({ selected: 1, sent: 1, skipped: 0, failed: 0 });
                 expect(second).toEqual({ selected: 1, sent: 0, skipped: 1, failed: 0 });
+                expect(fetcher).toHaveBeenCalledTimes(1);
+        });
+
+        it("manually sends only the requested department", async () => {
+                await insertMember("Anika", "919100000000", { department: "Engineering" });
+                await insertMember("Vikram", "919200000000", { department: "Design" });
+                const fetcher = successfulFetcher();
+
+                const result = await runDepartmentInitialNow(
+                        schedulerEnv("true"), 1, 1, "Engineering", indiaInitialTime, fetcher,
+                );
+
+                expect(result).toEqual({ selected: 1, sent: 1, skipped: 0, failed: 0 });
                 expect(fetcher).toHaveBeenCalledTimes(1);
         });
 

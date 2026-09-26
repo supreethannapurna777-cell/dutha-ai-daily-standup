@@ -1,7 +1,7 @@
 import type { WorkerEnv } from './env';
 import { managementPrincipalFromRequest, requireProjectAccess, teamLeadDepartment, type ManagementPrincipal } from './access-control';
 import { createEmployeeActivation } from './employee-portal';
-import { runProjectInitialNow } from './scheduler';
+import { runDepartmentInitialNow, runProjectInitialNow } from './scheduler';
 
 interface ManagedMember {
 	id: number;
@@ -276,7 +276,7 @@ function memberCard(member: ManagedMember): string {
         `;
 }
 
-function page(members: ManagedMember[], message: string | null, error: string | null, activationLink: string | null = null, projectId = 1): string {
+function page(members: ManagedMember[], message: string | null, error: string | null, activationLink: string | null = null, projectId = 1, departmentScope: string | null = null): string {
 	const activeMembers = members.filter((member) => member.active);
 	const removedMembers = members.filter((member) => !member.active);
 	const departments = new Map<string, ManagedMember[]>();
@@ -497,13 +497,13 @@ function page(members: ManagedMember[], message: string | null, error: string | 
                 ${error ? `<div class="error">${escapeHtml(error)}</div>` : ''}
 
                 <section class="add-card">
-                        <h2>Project stand-up</h2>
-                        <p>Send today's request to active employees whose automated messages are enabled. Anyone already sent an initial request today is skipped.</p>
+                        <h2>${departmentScope ? `${escapeHtml(departmentScope)} team stand-up` : 'Project stand-up'}</h2>
+                        <p>Send today's request to ${departmentScope ? 'your assigned team' : 'active employees'} whose automated messages are enabled. Anyone already sent an initial request today is skipped.</p>
                         <details>
                                 <summary>Send stand-up now</summary>
                                 <form method="post">
                                         <input type="hidden" name="action" value="send_now">
-                                        <p>This sends a real WhatsApp template message.</p>
+                                        <p>This sends a real WhatsApp template message${departmentScope ? ' only to your team' : ''}.</p>
                                         <button type="submit">Confirm and send now</button>
                                 </form>
                         </details>
@@ -622,7 +622,7 @@ async function renderManagementPage(
 				? `Stand-up request completed: ${params.get('sent') ?? '0'} sent, ${params.get('skipped') ?? '0'} already sent today, ${params.get('failed') ?? '0'} failed.`
 				: null;
 
-	return htmlResponse(page(members, message, error, activationLink, projectId), error ? 400 : 200);
+	return htmlResponse(page(members, message, error, activationLink, projectId, departmentScope), error ? 400 : 200);
 }
 
 interface AddMemberResult {
@@ -859,14 +859,13 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 		error = await updateMember(form, env, principal, projectId, departmentScope);
 		redirectValue = 'member';
 	} else if (action === 'send_now') {
-		if (departmentScope !== null) {
-			error = 'Team Leads can manage their team schedule, but sending a whole-project broadcast requires a Project Manager.';
-			redirectValue = '';
-		} else if (env.AUTOMATION_ENABLED !== 'true') {
+		if (env.AUTOMATION_ENABLED !== 'true') {
 			error = 'Automation is globally paused. No messages were sent.';
 			redirectValue = '';
 		} else {
-			const result = await runProjectInitialNow(env, principal.tenantId, projectId);
+			const result = departmentScope !== null
+				? await runDepartmentInitialNow(env, principal.tenantId, projectId, departmentScope)
+				: await runProjectInitialNow(env, principal.tenantId, projectId);
 			return new Response(null, {
 				status: 303,
 				headers: {
