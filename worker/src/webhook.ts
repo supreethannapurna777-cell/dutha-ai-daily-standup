@@ -257,6 +257,7 @@ export async function processWebhookPayload(
                 AvailabilityReplySender,
         voiceMessageReceiver?: VoiceMessageReceiver,
         voiceExtractor?: VoiceStructuredExtractor,
+        legacyPhoneNumberId?: string,
 ): Promise<WebhookResult> {
         const result: WebhookResult = {
                 received: 0,
@@ -321,6 +322,16 @@ export async function processWebhookPayload(
                                                 unknown
                                         >
                                         : {};
+						const metadata = typeof value.metadata === "object" && value.metadata !== null
+							? value.metadata as Record<string, unknown> : {};
+						const businessPhoneNumberId = typeof metadata.phone_number_id === "string"
+							? metadata.phone_number_id.trim() : "";
+						let inboundTenantId: number | null | undefined;
+						if (businessPhoneNumberId) {
+							const businessConnection = await db.prepare("SELECT tenant_id,connection_status FROM organisation_whatsapp_connections WHERE phone_number_id=? LIMIT 1").bind(businessPhoneNumberId).first<{tenant_id:number;connection_status:string}>();
+							if (businessConnection) inboundTenantId = businessConnection.connection_status === "connected" ? businessConnection.tenant_id : null;
+							else inboundTenantId = businessPhoneNumberId === legacyPhoneNumberId ? 1 : null;
+						}
 
 						await processDeliveryStatuses(value, db);
 
@@ -413,6 +424,10 @@ export async function processWebhookPayload(
                                                 ? message.from
                                                         .trim()
                                                 : "";
+								if (businessPhoneNumberId && inboundTenantId === null) {
+									result.ignored += 1;
+									continue;
+								}
 
                                 if (message.type === "audio") {
                                         const audio =
@@ -440,13 +455,15 @@ export async function processWebhookPayload(
                                         const identity = await resolveWhatsappIdentity(
                                                 db,
                                                 senderPhone,
+                                                inboundTenantId ?? undefined,
                                         );
                                         if (!identity) {
                                                 if (availabilityReplySender) {
                                                         await availabilityReplySender(
-                                                                senderPhone,
-                                                                "This WhatsApp number is not connected to Dutha. Ask your manager for an invitation.",
-                                                        );
+                                                        senderPhone,
+                                                        "This WhatsApp number is not connected to Dutha. Ask your manager for an invitation.",
+                                                        inboundTenantId ?? undefined,
+                                                );
                                                 }
                                                 result.ignored += 1;
                                                 continue;
@@ -510,6 +527,7 @@ export async function processWebhookPayload(
                                         messageId,
                                         text,
                                         now,
+                                        inboundTenantId ?? undefined,
                                 );
                                 if (enrolment.handled) {
                                         if (enrolment.duplicate) {
@@ -517,11 +535,11 @@ export async function processWebhookPayload(
                                                 continue;
                                         }
                                         if (availabilityReplySender && enrolment.message) {
-								const enrolledIdentity = await resolveWhatsappIdentity(db, senderPhone);
+								const enrolledIdentity = await resolveWhatsappIdentity(db, senderPhone, inboundTenantId ?? undefined);
                                                 await availabilityReplySender(
                                                         senderPhone,
                                                         enrolment.message,
-								enrolledIdentity?.tenantId,
+								enrolledIdentity?.tenantId ?? inboundTenantId ?? undefined,
                                                 );
                                         }
                                         result.received += 1;
@@ -531,12 +549,14 @@ export async function processWebhookPayload(
                                 const identity = await resolveWhatsappIdentity(
                                         db,
                                         senderPhone,
+                                        inboundTenantId ?? undefined,
                                 );
                                 if (!identity) {
                                         if (availabilityReplySender) {
                                                 await availabilityReplySender(
                                                         senderPhone,
                                                         "This WhatsApp number is not connected to Dutha. Ask your manager for an invitation.",
+                                                        inboundTenantId ?? undefined,
                                                 );
                                         }
                                         result.ignored += 1;

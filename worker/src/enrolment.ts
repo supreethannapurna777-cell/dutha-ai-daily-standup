@@ -44,6 +44,7 @@ export async function resolveChannelIdentity(
         db: D1Database,
         channel: "whatsapp" | "teams",
         externalId: string,
+        tenantId?: number,
 ): Promise<ChannelIdentity | null> {
         const row = await db.prepare(`
                 SELECT identity.tenant_id, identity.team_member_id,
@@ -54,8 +55,9 @@ export async function resolveChannelIdentity(
                         AND member.tenant_id = identity.tenant_id
                 WHERE identity.channel = ? AND identity.external_id = ?
                         AND member.active = 1
+                        AND (? IS NULL OR identity.tenant_id = ?)
                 LIMIT 1
-        `).bind(channel, externalId).first<{
+        `).bind(channel, externalId, tenantId ?? null, tenantId ?? null).first<{
                 tenant_id: number;
                 team_member_id: number;
                 primary_project_id: number;
@@ -72,19 +74,23 @@ export async function resolveChannelIdentity(
 export async function resolveWhatsappIdentity(
         db: D1Database,
         senderPhone: string,
+        tenantId?: number,
 ): Promise<ChannelIdentity | null> {
         const identity = await resolveChannelIdentity(
                 db,
                 "whatsapp",
                 senderPhone,
+                tenantId,
         );
         if (identity) return identity;
 
         const legacy = await db.prepare(`
                 SELECT id, tenant_id, primary_project_id, name
                 FROM team_members
-                WHERE phone = ? AND active = 1 AND enrolment_status = 'enrolled' LIMIT 1
-        `).bind(senderPhone).first<{
+                WHERE phone = ? AND active = 1 AND enrolment_status = 'enrolled'
+                        AND (? IS NULL OR tenant_id = ?)
+                LIMIT 1
+        `).bind(senderPhone, tenantId ?? null, tenantId ?? null).first<{
                 id: number;
                 tenant_id: number;
                 primary_project_id: number;
@@ -125,6 +131,7 @@ export async function processChannelEnrolment(
         messageId: string,
         text: string,
         now = new Date(),
+        expectedTenantId?: number,
 ): Promise<EnrolmentResult> {
 	const directConfirmation = text.trim().match(/^(yes|confirm|accept)$/i);
 	if (channel === "whatsapp" && directConfirmation) {
@@ -136,6 +143,7 @@ export async function processChannelEnrolment(
 			FROM team_members AS member
 			WHERE member.phone = ? AND member.active = 1
 				AND member.enrolment_status = 'invited'
+				AND (? IS NULL OR member.tenant_id = ?)
 				AND EXISTS (
 					SELECT 1 FROM direct_whatsapp_invites AS invite
 					WHERE invite.team_member_id = member.id
@@ -143,7 +151,7 @@ export async function processChannelEnrolment(
 						AND invite.expires_at > ?
 				)
 			LIMIT 1
-		`).bind(senderExternalId, now.toISOString()).first<{
+		`).bind(senderExternalId, expectedTenantId ?? null, expectedTenantId ?? null, now.toISOString()).first<{
 			id: number;
 			tenant_id: number;
 			primary_project_id: number;
@@ -217,8 +225,9 @@ export async function processChannelEnrolment(
                 FROM enrolment_invites
                 WHERE code_hash = ? AND revoked_at IS NULL
                         AND expires_at > ? AND use_count < max_uses
+                        AND (? IS NULL OR tenant_id = ?)
                 LIMIT 1
-        `).bind(codeHash, now.toISOString()).first<{
+        `).bind(codeHash, now.toISOString(), expectedTenantId ?? null, expectedTenantId ?? null).first<{
                 id: number;
                 tenant_id: number;
                 project_id: number;
@@ -230,8 +239,8 @@ export async function processChannelEnrolment(
                 await db.prepare(`
                         INSERT INTO channel_identity_events (
                                 channel, event_type, external_message_id, details
-                        ) VALUES (?, 'identity_rejected', ?, ?)
-                `).bind(channel, messageId, "Invalid, expired or exhausted invite").run();
+                        ) VALUES (?, ?, 'identity_rejected', ?, ?)
+                `).bind(expectedTenantId ?? null, channel, messageId, "Invalid, expired or exhausted invite").run();
                 return {
                         handled: true,
                         duplicate: false,
@@ -350,6 +359,7 @@ export async function processWhatsappEnrolment(
         messageId: string,
         text: string,
         now = new Date(),
+        expectedTenantId?: number,
 ): Promise<EnrolmentResult> {
-        return processChannelEnrolment(db, "whatsapp", senderPhone, senderName, messageId, text, now);
+        return processChannelEnrolment(db, "whatsapp", senderPhone, senderName, messageId, text, now, expectedTenantId);
 }

@@ -52,6 +52,12 @@ function textWebhookPayload(
 	};
 }
 
+function addressToBusinessNumber(payload: ReturnType<typeof textWebhookPayload>, phoneNumberId: string) {
+	const value=payload.entry[0].changes[0].value as unknown as Record<string,unknown>;
+	value.metadata={phone_number_id:phoneNumberId};
+	return payload;
+}
+
 
 function audioWebhookPayload(
 	messageId = "wamid.voice-webhook-001",
@@ -103,15 +109,40 @@ describe("WhatsApp webhook processing", () => {
 			env.DB.prepare(
 				"DELETE FROM processed_updates",
 			),
-			env.DB.prepare(
-				"DELETE FROM incoming_messages",
-			),
+				env.DB.prepare(
+					"DELETE FROM incoming_messages",
+				),
+				env.DB.prepare("DELETE FROM organisation_whatsapp_connections"),
 		]);
 		await env.DB.prepare(`
 			INSERT OR IGNORE INTO team_members (
 				name, phone, department, tenant_id, primary_project_id
 			) VALUES ('Test User', '919100000000', 'Testing', 1, 1)
 		`).run();
+	});
+
+	it("routes a message through the connected business number and tenant", async () => {
+		await env.DB.prepare(`INSERT INTO organisation_whatsapp_connections (tenant_id,phone_number_id,access_token_ciphertext,access_token_iv,connection_status,last_verified_at) VALUES (1,'111111111111111','ciphertext','iv','connected',CURRENT_TIMESTAMP)`).run();
+		const result=await processWebhookPayload(addressToBusinessNumber(textWebhookPayload('wamid.company-route'), '111111111111111'),env.DB,new Date(),undefined,undefined,undefined,'legacy-number-id');
+		expect(result).toEqual({received:1,duplicates:0,ignored:0});
+		const row=await env.DB.prepare("SELECT tenant_id FROM incoming_messages WHERE whatsapp_message_id='wamid.company-route'").first<{tenant_id:number}>();
+		expect(row?.tenant_id).toBe(1);
+	});
+
+	it("does not process a member message addressed to another company's WhatsApp number", async () => {
+		await env.DB.prepare("INSERT OR IGNORE INTO tenants (id,slug,name) VALUES (2,'other-company','Other Company')").run();
+		await env.DB.prepare(`INSERT INTO organisation_whatsapp_connections (tenant_id,phone_number_id,access_token_ciphertext,access_token_iv,connection_status,last_verified_at) VALUES (2,'222222222222222','ciphertext','iv','connected',CURRENT_TIMESTAMP)`).run();
+		const reply=vi.fn(async () => ({success:true}));
+		const result=await processWebhookPayload(addressToBusinessNumber(textWebhookPayload('wamid.wrong-company'), '222222222222222'),env.DB,new Date(),reply,undefined,undefined,'legacy-number-id');
+		expect(result).toEqual({received:0,duplicates:0,ignored:1});
+		expect(reply).toHaveBeenCalledWith('919100000000','This WhatsApp number is not connected to Dutha. Ask your manager for an invitation.',2);
+		expect(await env.DB.prepare("SELECT id FROM incoming_messages WHERE whatsapp_message_id='wamid.wrong-company'").first()).toBeNull();
+	});
+
+	it("ignores inbound messages from an unregistered business phone number", async () => {
+		const payload=addressToBusinessNumber(textWebhookPayload('wamid.unknown-business'), '999999999999999');
+		const result=await processWebhookPayload(payload,env.DB,new Date(),undefined,undefined,undefined,'legacy-number-id');
+		expect(result).toEqual({received:0,duplicates:0,ignored:1});
 	});
 
 	it("stores and processes a text reply", async () => {

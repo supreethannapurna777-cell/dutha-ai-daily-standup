@@ -42,6 +42,16 @@ describe('company WhatsApp connection', () => {
 		expect(await whatsappCredentialsForTenant(otherEnv,2)).toBeNull();
 	});
 
+	it('blocks a company from claiming another company’s connected phone number', async () => {
+		const encrypted=await encryptIntegrationSecret('tenant-two-token',key,2,0,'whatsapp','access_token');
+		await env.DB.prepare("INSERT INTO organisation_whatsapp_connections (tenant_id,phone_number_id,access_token_ciphertext,access_token_iv,connection_status,last_verified_at) VALUES (2,'222222222222',?,?,'connected',CURRENT_TIMESTAMP)").bind(encrypted.ciphertext,encrypted.iv).run();
+		const form=new FormData(); form.set('phone_number_id','222222222222'); form.set('access_token','another-long-meta-access-token');
+		const response=await whatsappConnectionResponse(request('POST',form),testEnv,async()=>Response.json({id:'222222222222',display_phone_number:'+91 99999 99999',verified_name:'Other company'}));
+		expect(response.status).toBe(400);
+		expect(await response.text()).toContain('already connected to another company workspace');
+		expect(await env.DB.prepare('SELECT tenant_id FROM organisation_whatsapp_connections WHERE tenant_id=1').first()).toBeNull();
+	});
+
 	it('sends outbound messages from that tenant’s connected Meta number', async () => {
 		const encrypted = await encryptIntegrationSecret('company-two-token',key,2,0,'whatsapp','access_token');
 		await env.DB.prepare("INSERT INTO organisation_whatsapp_connections (tenant_id,phone_number_id,access_token_ciphertext,access_token_iv,connection_status,last_verified_at) VALUES (2,'222222222222',?,?,'connected',CURRENT_TIMESTAMP)").bind(encrypted.ciphertext,encrypted.iv).run();
