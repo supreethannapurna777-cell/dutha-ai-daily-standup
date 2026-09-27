@@ -25,6 +25,12 @@ function post(path: string, data: Record<string, string>, cookie?: string): Requ
 
 describe('employee portal', () => {
 	beforeEach(async () => {
+		await env.DB.batch([
+			env.DB.prepare('DELETE FROM case_events'),
+			env.DB.prepare('DELETE FROM case_availability'),
+			env.DB.prepare('DELETE FROM case_time_options'),
+			env.DB.prepare('DELETE FROM coordination_cases'),
+		]);
 		await env.DB.prepare(`DELETE FROM team_members WHERE email='employee@example.com'`).run();
 		const row = await env.DB.prepare(`
 			INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id, email, enrolment_status, scheduling_enabled)
@@ -89,6 +95,73 @@ describe('employee portal', () => {
 		expect(html).toContain('Slack');
 		expect(html).toContain('<h2>Email</h2>');
 		expect(html.match(/Coming soon/g)?.length).toBe(2);
+	});
+
+	it('shows only the signed-in employee’s recent stand-up history', async () => {
+		await env.DB.prepare("UPDATE team_members SET phone='919177700001' WHERE id=?").bind(memberId).run();
+		const ownIncoming = await env.DB.prepare("INSERT INTO incoming_messages (whatsapp_message_id, received_at, sender_name, sender_phone, original_reply, processing_status, tenant_id, project_id) VALUES (?, ?, 'Employee One', '919177700001', 'Own update', 'processed', 1, 1) RETURNING id").bind(`wamid.employee-own-${crypto.randomUUID()}`, '2026-09-26T09:00:00.000Z').first<{ id:number }>();
+		const otherIncoming = await env.DB.prepare("INSERT INTO incoming_messages (whatsapp_message_id, received_at, sender_name, sender_phone, original_reply, processing_status, tenant_id, project_id) VALUES (?, ?, 'Other Employee', '919177700002', 'Other update', 'processed', 1, 1) RETURNING id").bind(`wamid.employee-other-${crypto.randomUUID()}`, '2026-09-26T09:05:00.000Z').first<{ id:number }>();
+		await env.DB.batch([
+			env.DB.prepare("INSERT INTO processed_updates (message_id, sender_name, tasks, blockers, expected_completion, original_reply, processing_status, tenant_id, project_id) VALUES (?, 'Employee One', 'Ship private history', 'No blocker', 'Today', 'Own update', 'processed', 1, 1)").bind(ownIncoming!.id),
+			env.DB.prepare("INSERT INTO processed_updates (message_id, sender_name, tasks, blockers, expected_completion, original_reply, processing_status, tenant_id, project_id) VALUES (?, 'Other Employee', 'Secret other task', 'Sensitive blocker', 'Tomorrow', 'Other update', 'processed', 1, 1)").bind(otherIncoming!.id),
+		]);
+		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
+		await employeePortalResponse(post('/employee/activate', { token, password: 'StrongPassword123', confirm_password: 'StrongPassword123' }), portalEnv);
+		const login = await employeePortalResponse(post('/employee/login', { email: 'employee@example.com', password: 'StrongPassword123' }), portalEnv);
+		const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+		const dashboard = await employeePortalResponse(new Request('https://example.com/employee', { headers: { Cookie: cookie } }), portalEnv);
+		const html = await dashboard.text();
+		expect(html).toContain('My submitted updates');
+		expect(html).toContain('Ship private history');
+		expect(html).not.toContain('Secret other task');
+		expect(html).not.toContain('919177700001');
+	});
+
+	it('submits an owned update correction without changing the original', async () => {
+		const phone = `91${Math.floor(1000000000 + Math.random() * 8999999999)}`;
+		await env.DB.prepare('UPDATE team_members SET phone=? WHERE id=?').bind(phone, memberId).run();
+		const incoming = await env.DB.prepare("INSERT INTO incoming_messages (whatsapp_message_id, received_at, sender_name, sender_phone, original_reply, processing_status, tenant_id, project_id) VALUES (?, CURRENT_TIMESTAMP, 'Employee One', ?, 'I completed an old task', 'processed', 1, 1) RETURNING id").bind(`wamid.correction-own-${crypto.randomUUID()}`, phone).first<{id:number}>();
+		const processed = await env.DB.prepare("INSERT INTO processed_updates (message_id, sender_name, tasks, blockers, expected_completion, original_reply, processing_status, tenant_id, project_id) VALUES (?, 'Employee One', 'Old task', 'No blocker', 'Today', 'I completed an old task', 'processed', 1, 1) RETURNING id").bind(incoming!.id).first<{id:number}>();
+		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
+		await employeePortalResponse(post('/employee/activate', { token, password: 'StrongPassword123', confirm_password: 'StrongPassword123' }), portalEnv);
+		const login = await employeePortalResponse(post('/employee/login', { email: 'employee@example.com', password: 'StrongPassword123' }), portalEnv);
+		const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+		const response = await employeePortalResponse(post('/employee', { action: 'correct_update', processed_update_id: String(processed!.id), correction_text: 'The task was completed yesterday, not today.' }, cookie), portalEnv);
+		expect(response.status).toBe(303);
+		expect(response.headers.get('Location')).toContain('correction=submitted');
+		const stored = await env.DB.prepare('SELECT status, original_tasks, original_reply, correction_text FROM employee_update_corrections WHERE processed_update_id=?').bind(processed!.id).first<{status:string;original_tasks:string;original_reply:string;correction_text:string}>();
+		expect(stored).toMatchObject({ status:'pending_review', original_tasks:'Old task', original_reply:'I completed an old task' });
+		const unchanged = await env.DB.prepare('SELECT tasks, expected_completion FROM processed_updates WHERE id=?').bind(processed!.id).first<{tasks:string;expected_completion:string}>();
+		expect(unchanged).toEqual({ tasks:'Old task', expected_completion:'Today' });
+	});
+
+	it('does not let an employee request correction on another sender’s update', async () => {
+		const incoming = await env.DB.prepare("INSERT INTO incoming_messages (whatsapp_message_id, received_at, sender_name, sender_phone, original_reply, processing_status, tenant_id, project_id) VALUES (?, CURRENT_TIMESTAMP, 'Someone Else', '919177700099', 'Other persons private note', 'processed', 1, 1) RETURNING id").bind(`wamid.correction-other-${crypto.randomUUID()}`).first<{id:number}>();
+		const processed = await env.DB.prepare("INSERT INTO processed_updates (message_id, sender_name, tasks, original_reply, processing_status, tenant_id, project_id) VALUES (?, 'Someone Else', 'Private other task', 'Other persons private note', 'processed', 1, 1) RETURNING id").bind(incoming!.id).first<{id:number}>();
+		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
+		await employeePortalResponse(post('/employee/activate', { token, password: 'StrongPassword123', confirm_password: 'StrongPassword123' }), portalEnv);
+		const login = await employeePortalResponse(post('/employee/login', { email: 'employee@example.com', password: 'StrongPassword123' }), portalEnv);
+		const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+		const response = await employeePortalResponse(post('/employee', { action: 'correct_update', processed_update_id: String(processed!.id), correction_text: 'Please change this other task.' }, cookie), portalEnv);
+		expect(response.status).toBe(404);
+		const corrections = await env.DB.prepare('SELECT COUNT(*) AS count FROM employee_update_corrections WHERE processed_update_id=?').bind(processed!.id).first<{count:number}>();
+		expect(corrections?.count).toBe(0);
+	});
+
+	it('shows the employee’s own coordination case and only a confirmed HTTPS meeting link', async () => {
+		const incoming = await env.DB.prepare("INSERT INTO incoming_messages (whatsapp_message_id, received_at, sender_name, sender_phone, original_reply, processing_status, tenant_id, project_id) VALUES (?, CURRENT_TIMESTAMP, 'Employee One', '919177700010', 'Coordination request', 'processed', 1, 1) RETURNING id").bind(`wamid.employee-case-${crypto.randomUUID()}`).first<{ id:number }>();
+		const processed = await env.DB.prepare("INSERT INTO processed_updates (message_id, sender_name, blockers, original_reply, processing_status, tenant_id, project_id) VALUES (?, 'Employee One', 'Need a review', 'Coordination request', 'processed', 1, 1) RETURNING id").bind(incoming!.id).first<{ id:number }>();
+		await env.DB.prepare("INSERT INTO coordination_cases (source_update_id, requester_member_id, case_type, issue_summary, status, priority, meeting_link, tenant_id, project_id) VALUES (?, ?, 'coordination', 'Review deployment approach', 'scheduled', 'high', 'https://meet.example.com/dutha-review', 1, 1)").bind(processed!.id, memberId).run();
+		const token = await createEmployeeActivation(env.DB, memberId, 1, 'employee@example.com');
+		await employeePortalResponse(post('/employee/activate', { token, password: 'StrongPassword123', confirm_password: 'StrongPassword123' }), portalEnv);
+		const login = await employeePortalResponse(post('/employee/login', { email: 'employee@example.com', password: 'StrongPassword123' }), portalEnv);
+		const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+		const dashboard = await employeePortalResponse(new Request('https://example.com/employee', { headers: { Cookie: cookie } }), portalEnv);
+		const html = await dashboard.text();
+		expect(html).toContain('My coordination requests');
+		expect(html).toContain('Review deployment approach');
+		expect(html).toContain('Join confirmed meeting');
+		expect(html).toContain('https://meet.example.com/dutha-review');
 	});
 
 	it('shows a secure desktop QR code with a personal JOIN instruction', async () => {

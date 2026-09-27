@@ -56,6 +56,7 @@ import { deploymentPreflightResponse } from "./deployment-preflight";
 import { employeePortalResponse } from "./employee-portal";
 import { settingsManagementResponse } from "./settings-management";
 import { duthaUiScriptResponse, publicLandingResponse } from "./ui";
+import { correctionManagementResponse } from "./correction-management";
 
 export type { WorkerEnv } from "./env";
 
@@ -374,6 +375,10 @@ export default {
                                 managementRequest,
                                 env,
                         );
+                }
+
+                if (url.pathname === "/dashboard/corrections") {
+                        return correctionManagementResponse(managementRequest, env);
                 }
 
                 if (
