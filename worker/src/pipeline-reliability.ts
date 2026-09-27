@@ -30,8 +30,9 @@ async function notificationCounts(db: D1Database, channel: "whatsapp" | "teams")
 
 export async function integrationReadiness(env: WorkerEnv): Promise<IntegrationReadiness> {
         const teamsEnabled = env.TEAMS_RELEASE_ENABLED?.trim().toLowerCase() === "true";
-        const [whatsapp, teams, jira] = await Promise.all([
+        const [whatsapp, whatsappConnection, teams, jira] = await Promise.all([
                 notificationCounts(env.DB, "whatsapp"),
+                env.DB.prepare("SELECT COUNT(*) AS connected FROM organisation_whatsapp_connections WHERE connection_status='connected'").first<{ connected: number }>(),
                 notificationCounts(env.DB, "teams"),
                 env.DB.prepare(`SELECT
                         SUM(CASE WHEN sync_status IN ('pending', 'syncing') THEN 1 ELSE 0 END) AS pending,
@@ -40,7 +41,7 @@ export async function integrationReadiness(env: WorkerEnv): Promise<IntegrationR
         ]);
         return {
                 whatsapp: {
-                        configured: Boolean(env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID && env.WHATSAPP_APP_SECRET),
+                        configured: Boolean(env.WHATSAPP_APP_SECRET && env.WHATSAPP_WEBHOOK_VERIFY_TOKEN && (whatsappConnection?.connected || (env.WHATSAPP_ACCESS_TOKEN && env.WHATSAPP_PHONE_NUMBER_ID))),
                         pending: whatsapp?.pending ?? 0, failed: whatsapp?.failed ?? 0,
                 },
                 teams: {

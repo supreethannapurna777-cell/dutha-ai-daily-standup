@@ -5,7 +5,7 @@ import { integrationReadiness, recoverIntegrationPipeline } from "../src/pipelin
 
 const fullEnv = {
         ...env,
-        WHATSAPP_ACCESS_TOKEN: "wa-token", WHATSAPP_PHONE_NUMBER_ID: "phone-id", WHATSAPP_APP_SECRET: "wa-secret", WHATSAPP_API_VERSION: "v26.0",
+        WHATSAPP_ACCESS_TOKEN: "wa-token", WHATSAPP_PHONE_NUMBER_ID: "phone-id", WHATSAPP_APP_SECRET: "wa-secret", WHATSAPP_WEBHOOK_VERIFY_TOKEN:"verify", WHATSAPP_API_VERSION: "v26.0",
         MICROSOFT_APP_ID: "teams-app", MICROSOFT_APP_PASSWORD: "teams-secret", MICROSOFT_TENANT_ID: "tenant",
         TEAMS_RELEASE_ENABLED: "true",
         JIRA_BASE_URL: "https://example.atlassian.net", JIRA_EMAIL: "jira@example.com", JIRA_API_TOKEN: "jira-token", JIRA_PROJECT_KEY: "DUTHA", JIRA_WEBHOOK_SECRET: "webhook-secret",

@@ -9,6 +9,7 @@ const readyEnv = {
         DASHBOARD_SESSION_SECRET: "a-secure-session-secret-with-32-characters",
         WHATSAPP_ACCESS_TOKEN: "token", WHATSAPP_PHONE_NUMBER_ID: "phone",
         WHATSAPP_APP_SECRET: "app-secret", WHATSAPP_WEBHOOK_VERIFY_TOKEN: "verify",
+	INTEGRATION_ENCRYPTION_KEY: btoa(String.fromCharCode(...new Uint8Array(32).fill(7))),
 	WHATSAPP_TEMPLATE_LANGUAGE: "en_US",
 	WHATSAPP_INITIAL_TEMPLATE_NAME: "daily_standup_request",
 	WHATSAPP_REMINDER_TEMPLATE_NAME: "daily_standup_reminder",
@@ -64,6 +65,7 @@ describe("deployment preflight", () => {
                         "jira_case_links", "jira_webhook_events", "channel_notification_outbox",
                         "teams_conversation_references", "integration_operation_events",
                         "atlassian_mcp_context",
+                        "organisation_whatsapp_connections",
                 ];
                 const tables = (await env.DB.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all<{ name: string }>()).results.map((row) => row.name);
                 for (const table of expectedTables) expect(tables).toContain(table);

@@ -236,6 +236,7 @@ describe("WhatsApp voice updates", () => {
                 const voiceEnv = {
                         WHATSAPP_API_VERSION: "v26.0",
                         WHATSAPP_ACCESS_TOKEN: "meta-token",
+                        WHATSAPP_PHONE_NUMBER_ID: "phone-id",
                         AI: { run },
                 } as WorkerEnv;
 

@@ -7,6 +7,7 @@ import {
         sendTextMessage,
         type Fetcher,
 } from "./whatsapp";
+import { whatsappCredentialsForTenant } from "./whatsapp-connection";
 
 
 export interface IncomingVoiceMessage {
@@ -45,6 +46,7 @@ export interface VoiceTranscription {
 export type VoiceTranscriber = (
         mediaId: string,
         mimeType?: string,
+        tenantId?: number,
 ) => Promise<VoiceTranscription>;
 
 
@@ -56,6 +58,7 @@ export type VoiceStructuredExtractor = (
 export type VoiceConfirmationSender = (
         recipient: string,
         text: string,
+        tenantId?: number,
 ) => Promise<{
         success: boolean;
         messageId?: string;
@@ -154,7 +157,7 @@ export async function processVoiceUpdate(
                 extractUpdate(text),
 ): Promise<void> {
         const voice = await db.prepare(`
-                SELECT id, media_id, mime_type, sender_phone
+                SELECT id, media_id, mime_type, sender_phone, tenant_id
                 FROM voice_updates
                 WHERE id = ? AND status IN ('received', 'failed')
         `).bind(voiceUpdateId).first<{
@@ -162,6 +165,7 @@ export async function processVoiceUpdate(
                 media_id: string;
                 mime_type: string | null;
                 sender_phone: string;
+                tenant_id: number;
         }>();
 
         if (!voice) {
@@ -179,6 +183,7 @@ export async function processVoiceUpdate(
                 const transcription = await transcriber(
                         voice.media_id,
                         voice.mime_type ?? undefined,
+                        voice.tenant_id,
                 );
                 const transcript = transcription.text.trim();
 
@@ -190,6 +195,7 @@ export async function processVoiceUpdate(
                 const sent = await sender(
                         voice.sender_phone,
                         confirmationText(extracted),
+                        voice.tenant_id,
                 );
 
                 if (!sent.success) {
@@ -394,6 +400,7 @@ export async function processVoiceReply(
                         await sender(
                                 senderPhone,
                                 "Confirmed. Your voice update is now visible on the Dutha dashboard.",
+                                voice.tenant_id,
                         );
                 }
                 return {
@@ -442,6 +449,7 @@ export async function processVoiceReply(
                 await sender(
                         senderPhone,
                         confirmationText(extracted),
+                        voice.tenant_id,
                 );
         }
 
@@ -477,9 +485,10 @@ export function createCloudflareVoiceTranscriber(
         env: WorkerEnv,
         fetcher: Fetcher = fetch,
 ): VoiceTranscriber {
-        return async (mediaId, declaredMimeType) => {
+        return async (mediaId, declaredMimeType, tenantId) => {
+                const credentials = await whatsappCredentialsForTenant(env,tenantId);
                 if (
-                        !env.WHATSAPP_ACCESS_TOKEN
+                        !credentials
                         || !env.AI
                 ) {
                         throw new Error("Voice transcription is not configured.");
@@ -489,7 +498,7 @@ export function createCloudflareVoiceTranscriber(
                         `https://graph.facebook.com/${env.WHATSAPP_API_VERSION}/${mediaId}`,
                         {
                                 headers: {
-                                        Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+                                        Authorization: `Bearer ${credentials.accessToken}`,
                                 },
                         },
                 );
@@ -500,7 +509,7 @@ export function createCloudflareVoiceTranscriber(
 
                 const mediaResponse = await fetcher(metadata.url, {
                         headers: {
-                                Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+                                Authorization: `Bearer ${credentials.accessToken}`,
                         },
                 });
                 if (!mediaResponse.ok) {
@@ -542,8 +551,8 @@ export function createCloudflareVoiceTranscriber(
 export function defaultVoiceSender(
         env: WorkerEnv,
 ): VoiceConfirmationSender {
-        return (recipient, text) =>
-                sendTextMessage(env, recipient, text);
+        return (recipient, text, tenantId) =>
+                sendTextMessage(env, recipient, text, fetch, tenantId);
 }
 
 

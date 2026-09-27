@@ -109,15 +109,15 @@ export async function processJiraWebhook(db: D1Database, payload: JiraPayload, r
 
 export async function deliverPendingWhatsappNotifications(env: WorkerEnv, fetcher: Fetcher = fetch): Promise<number> {
         const pending = await env.DB.prepare(`
-                SELECT outbox.id, outbox.message, identity.external_id FROM channel_notification_outbox AS outbox
+                SELECT outbox.id, outbox.tenant_id, outbox.message, identity.external_id FROM channel_notification_outbox AS outbox
                 INNER JOIN channel_identities AS identity ON identity.team_member_id = outbox.team_member_id AND identity.tenant_id = outbox.tenant_id AND identity.channel = 'whatsapp'
                 WHERE outbox.channel = 'whatsapp' AND outbox.delivery_status IN ('pending', 'failed') AND outbox.attempt_count < 5
                 ORDER BY outbox.created_at LIMIT 20
-        `).all<{ id: number; message: string; external_id: string }>();
+        `).all<{ id: number; tenant_id: number; message: string; external_id: string }>();
         let sent = 0;
         for (const notification of pending.results) {
                 await env.DB.prepare(`UPDATE channel_notification_outbox SET delivery_status = 'sending', attempt_count = attempt_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(notification.id).run();
-                const result = await sendTextMessage(env, notification.external_id, notification.message, fetcher);
+                const result = await sendTextMessage(env, notification.external_id, notification.message, fetcher, notification.tenant_id);
                 await env.DB.prepare(`UPDATE channel_notification_outbox SET delivery_status = ?, last_error = ?, sent_at = CASE WHEN ? = 'sent' THEN CURRENT_TIMESTAMP ELSE sent_at END, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
                         .bind(result.success ? "sent" : "failed", result.error ?? null, result.success ? "sent" : "failed", notification.id).run();
                 if (result.success) sent += 1;

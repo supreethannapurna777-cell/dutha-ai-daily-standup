@@ -125,6 +125,7 @@ export async function sendCaseAvailabilityRequests(
                         `
                         SELECT
                                 member.id,
+                                member.tenant_id AS tenantId,
                                 member.name,
                                 member.phone,
                                 member.department,

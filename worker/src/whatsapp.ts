@@ -1,4 +1,5 @@
 import type { WorkerEnv } from "./env";
+import { whatsappCredentialsForTenant } from "./whatsapp-connection";
 
 
 export interface TeamMember {
@@ -6,6 +7,7 @@ export interface TeamMember {
 	name: string;
 	phone: string;
 	department: string;
+	tenantId?: number;
 }
 
 
@@ -84,12 +86,13 @@ export async function sendTemplateMessage(
 	templateName: string,
 	parameters: string[],
 	fetcher: Fetcher = fetch,
+	tenantId?: number,
 ): Promise<SendResult> {
 	const phone = normalisePhone(recipient);
+	const credentials = await whatsappCredentialsForTenant(env, tenantId);
 
 	if (
-		!env.WHATSAPP_ACCESS_TOKEN ||
-		!env.WHATSAPP_PHONE_NUMBER_ID ||
+		!credentials ||
 		!phone ||
 		!templateName
 	) {
@@ -123,12 +126,12 @@ export async function sendTemplateMessage(
 
 	const response = await fetcher(
 		`https://graph.facebook.com/${env.WHATSAPP_API_VERSION}` +
-			`/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+			`/${credentials.phoneNumberId}/messages`,
 		{
 			method: "POST",
 			headers: {
 				Authorization:
-					`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+					`Bearer ${credentials.accessToken}`,
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify(payload),
@@ -144,13 +147,14 @@ export async function sendTextMessage(
 	recipient: string,
 	text: string,
 	fetcher: Fetcher = fetch,
+	tenantId?: number,
 ): Promise<SendResult> {
 	const phone = normalisePhone(recipient);
 	const body = text.trim();
+	const credentials = await whatsappCredentialsForTenant(env, tenantId);
 
 	if (
-		!env.WHATSAPP_ACCESS_TOKEN ||
-		!env.WHATSAPP_PHONE_NUMBER_ID ||
+		!credentials ||
 		!phone ||
 		!body
 	) {
@@ -162,12 +166,12 @@ export async function sendTextMessage(
 
 	const response = await fetcher(
 		`https://graph.facebook.com/${env.WHATSAPP_API_VERSION}` +
-			`/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+			`/${credentials.phoneNumberId}/messages`,
 		{
 			method: "POST",
 			headers: {
 				Authorization:
-					`Bearer ${env.WHATSAPP_ACCESS_TOKEN}`,
+					`Bearer ${credentials.accessToken}`,
 				"Content-Type": "application/json",
 			},
 			body: JSON.stringify({
@@ -198,6 +202,7 @@ export function sendInitialRequest(
 		env.WHATSAPP_INITIAL_TEMPLATE_NAME,
 		[member.name],
 		fetcher,
+		member.tenantId,
 	);
 }
 
@@ -219,6 +224,7 @@ export function sendReminder(
 		env.WHATSAPP_REMINDER_TEMPLATE_NAME,
 		[member.name, timing],
 		fetcher,
+		member.tenantId,
 	);
 }
 
@@ -249,13 +255,14 @@ export function sendAvailabilityRequest(
 			String(caseId),
 		],
 		fetcher,
+		member.tenantId,
 	);
 }
 
 
 export function sendMeetingScheduled(
 	env: WorkerEnv,
-	member: Pick<TeamMember, "name" | "phone">,
+	member: Pick<TeamMember, "name" | "phone"> & Partial<Pick<TeamMember, "tenantId">>,
 	caseId: number,
 	meetingTime: string,
 	durationMinutes: number,
@@ -274,5 +281,6 @@ export function sendMeetingScheduled(
 			meetingLink,
 		],
 		fetcher,
+		member.tenantId,
 	);
 }

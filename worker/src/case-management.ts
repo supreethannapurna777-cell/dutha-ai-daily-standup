@@ -1317,7 +1317,7 @@ async function notifyParticipants(
 
 	const participants = await env.DB.prepare(
 		`
-			SELECT id, name, phone, timezone
+			SELECT id, name, phone, timezone, tenant_id AS tenantId
                         FROM team_members
                         WHERE id IN (?, ?)
                         ORDER BY id
@@ -1328,7 +1328,8 @@ async function notifyParticipants(
 			id: number;
 			name: string;
 			phone: string;
-			timezone: string;
+					timezone: string;
+					tenantId: number;
 		}>();
 
 	if (participants.results.length !== 2) {

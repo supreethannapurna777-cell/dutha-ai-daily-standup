@@ -58,6 +58,7 @@ import { settingsManagementResponse } from "./settings-management";
 import { duthaUiScriptResponse, publicLandingResponse } from "./ui";
 import { correctionManagementResponse } from "./correction-management";
 import { jiraConnectionManagementResponse } from "./jira-connection-management";
+import { whatsappConnectionResponse } from "./whatsapp-connection";
 
 export type { WorkerEnv } from "./env";
 
@@ -165,12 +166,14 @@ async function receiveWebhook(
                         payload,
                         env.DB,
                         new Date(),
-                        (recipient, text) =>
+                        (recipient, text, tenantId) => tenantId ?
                                 sendTextMessage(
                                         env,
                                         recipient,
                                         text,
-                                ),
+                                        fetch,
+                                        tenantId,
+                                ) : Promise.resolve({ success: false, error: "Company WhatsApp sender could not be identified." }),
                         async (message) => {
                                 const id = await acceptVoiceUpdate(
                                         env.DB,
@@ -356,6 +359,10 @@ export default {
 
                 if (url.pathname === "/dashboard/settings") {
 			return settingsManagementResponse(managementRequest, env);
+		}
+
+		if (url.pathname === "/dashboard/whatsapp") {
+			return whatsappConnectionResponse(managementRequest, env);
 		}
 
                 if (

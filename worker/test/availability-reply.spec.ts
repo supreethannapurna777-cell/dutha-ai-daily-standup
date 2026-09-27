@@ -434,6 +434,7 @@ describe("WhatsApp availability replies", () => {
                         expect.stringContaining(
                                 "Availability saved",
                         ),
+                        1,
                 );
         });
 
@@ -463,6 +464,7 @@ describe("WhatsApp availability replies", () => {
                         expect.stringContaining(
                                 "Availability was not saved",
                         ),
+                        1,
                 );
 
                 const incoming = await env.DB

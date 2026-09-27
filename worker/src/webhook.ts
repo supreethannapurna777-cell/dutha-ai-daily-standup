@@ -27,6 +27,7 @@ export interface WebhookResult {
 export type AvailabilityReplySender = (
         recipient: string,
         text: string,
+        tenantId?: number,
 ) => Promise<{
         success: boolean;
         error?: string;
@@ -205,6 +206,7 @@ async function safelySendAvailabilityConfirmation(
         success: boolean,
         matched: boolean,
         error: string | undefined,
+        tenantId?: number,
 ): Promise<void> {
         if (!sender) {
                 return;
@@ -218,6 +220,7 @@ async function safelySendAvailabilityConfirmation(
                                 matched,
                                 error,
                         ),
+                        tenantId,
                 );
 
                 if (!result.success) {
@@ -514,9 +517,11 @@ export async function processWebhookPayload(
                                                 continue;
                                         }
                                         if (availabilityReplySender && enrolment.message) {
+								const enrolledIdentity = await resolveWhatsappIdentity(db, senderPhone);
                                                 await availabilityReplySender(
                                                         senderPhone,
                                                         enrolment.message,
+								enrolledIdentity?.tenantId,
                                                 );
                                         }
                                         result.received += 1;
@@ -580,8 +585,8 @@ export async function processWebhookPayload(
                                         async (workflowMessage) => {
                                                 const resolutionReply = await processResolutionReply(db, workflowMessage);
                                                 if (resolutionReply.handled) {
-                                                        if (resolutionReply.response && availabilityReplySender) {
-                                                                await availabilityReplySender(senderPhone, resolutionReply.response);
+										if (resolutionReply.response && availabilityReplySender) {
+											await availabilityReplySender(senderPhone, resolutionReply.response, identity.tenantId);
                                                         }
                                                         return resolutionReply;
                                                 }
@@ -600,6 +605,7 @@ export async function processWebhookPayload(
                                                         availabilityReply.success,
                                                         availabilityReply.matched,
                                                         availabilityReply.error,
+                                                        identity.tenantId,
                                                 );
                                                 console.log(JSON.stringify({
                                                         event: "availability_reply_processed",

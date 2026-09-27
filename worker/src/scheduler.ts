@@ -149,6 +149,7 @@ async function getScheduledMembers(
                         `
                         SELECT
                                 id,
+                                tenant_id AS tenantId,
                                 name,
                                 phone,
                                 department,
@@ -418,7 +419,7 @@ export async function runProjectInitialNow(
         fetcher: Fetcher = fetch,
 ): Promise<ManualStandupResult> {
         const result = await env.DB.prepare(`
-                SELECT member.id, member.name, member.phone, member.department,
+                        SELECT member.id, member.tenant_id AS tenantId, member.name, member.phone, member.department,
                         member.timezone, member.working_days, member.initial_time,
                         member.reminder_1_time, member.reminder_2_time
                 FROM team_members AS member
@@ -477,7 +478,7 @@ export async function runDepartmentInitialNow(
         fetcher: Fetcher = fetch,
 ): Promise<ManualStandupResult> {
         const result = await env.DB.prepare(`
-                SELECT member.id, member.name, member.phone, member.department,
+                SELECT member.id, member.tenant_id AS tenantId, member.name, member.phone, member.department,
                         member.timezone, member.working_days, member.initial_time,
                         member.reminder_1_time, member.reminder_2_time
                 FROM team_members AS member

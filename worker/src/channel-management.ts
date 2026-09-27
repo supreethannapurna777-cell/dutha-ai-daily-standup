@@ -408,8 +408,10 @@ export async function channelManagementResponse(
 				const sent = await sendTemplateMessage(
 						env,
 						member.phone,
-						env.WHATSAPP_ENROLMENT_TEMPLATE_NAME || "dutha_enrolment_invitation",
-						[member.name],
+					env.WHATSAPP_ENROLMENT_TEMPLATE_NAME || "dutha_enrolment_invitation",
+					[member.name],
+					fetch,
+					actor.tenantId,
 				);
 				if (!sent.success) {
 						return render(request, env, actor, selectedProject, null, null, `WhatsApp invitation failed: ${sent.error || "Unknown error"}`);
