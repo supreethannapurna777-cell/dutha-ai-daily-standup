@@ -1,5 +1,5 @@
 import type { WorkerEnv } from "./env";
-import { jiraConfigFromEnv, retryPendingJiraSyncs, type JiraRetrySummary } from "./jira-sync";
+import { jiraConfigForProject, jiraConfigFromEnv, retryPendingJiraSyncs, type JiraRetrySummary } from "./jira-sync";
 import { atlassianMcpConfigFromEnv } from "./atlassian-mcp";
 import { deliverPendingWhatsappNotifications } from "./jira-webhook";
 import { deliverPendingTeamsNotifications } from "./teams";
@@ -91,9 +91,8 @@ async function recordExhaustedNotifications(db: D1Database): Promise<number> {
 
 export async function recoverIntegrationPipeline(env: WorkerEnv, fetcher: Fetcher = fetch): Promise<PipelineRecoverySummary> {
         const recoveredNotifications = await recoverStuckNotifications(env.DB);
-        const jiraConfig = jiraConfigFromEnv(env);
-        const jira = jiraConfig
-                ? await retryPendingJiraSyncs(env.DB, jiraConfig, fetcher, atlassianMcpConfigFromEnv(env))
+        const jira = (jiraConfigFromEnv(env) || env.INTEGRATION_ENCRYPTION_KEY)
+                ? await retryPendingJiraSyncs(env.DB, (tenantId,projectId)=>jiraConfigForProject(env.DB,env,tenantId,projectId), fetcher, atlassianMcpConfigFromEnv(env))
                 : { selected: 0, synced: 0, failed: 0, exhausted: 0 };
         const whatsappSent = await deliverPendingWhatsappNotifications(env, fetcher);
         const teamsSent = env.TEAMS_RELEASE_ENABLED?.trim().toLowerCase() === "true"

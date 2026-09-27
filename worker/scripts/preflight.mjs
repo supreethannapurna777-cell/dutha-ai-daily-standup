@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const expectedMigrations = Array.from({ length: 24 }, (_, index) => String(index + 1).padStart(4, "0"));
+const expectedMigrations = Array.from({ length: 25 }, (_, index) => String(index + 1).padStart(4, "0"));
 const migrations = readdirSync(new URL("../migrations", import.meta.url))
         .filter((name) => /^\d{4}_.+\.sql$/.test(name)).sort();
 const errors = [];
@@ -22,7 +22,7 @@ const forbiddenSecrets = [
         "DASHBOARD_PASSWORD", "DASHBOARD_SESSION_SECRET", "WHATSAPP_ACCESS_TOKEN",
         "WHATSAPP_APP_SECRET", "WHATSAPP_WEBHOOK_VERIFY_TOKEN", "JIRA_API_TOKEN",
         "JIRA_WEBHOOK_SECRET", "MICROSOFT_APP_PASSWORD", "ATLASSIAN_MCP_API_TOKEN",
-        "ATLASSIAN_MCP_SERVICE_TOKEN",
+        "ATLASSIAN_MCP_SERVICE_TOKEN", "INTEGRATION_ENCRYPTION_KEY",
 ];
 for (const secret of forbiddenSecrets) {
         if (configText.includes(`"${secret}"`)) errors.push(`${secret} must be stored as a Wrangler secret, not in wrangler.jsonc.`);

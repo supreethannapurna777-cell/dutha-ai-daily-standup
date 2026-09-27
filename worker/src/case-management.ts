@@ -1,7 +1,7 @@
 import type { WorkerEnv } from './env';
 import { managementPrincipalFromRequest, requireProjectAccess, teamLeadDepartment, type ManagementPrincipal } from './access-control';
 import { sendMeetingScheduled, type Fetcher } from './whatsapp';
-import { jiraConfigFromEnv, syncApprovedCaseToJira } from './jira-sync';
+import { jiraConfigForProject, syncApprovedCaseToJira } from './jira-sync';
 import { atlassianMcpConfigFromEnv } from './atlassian-mcp';
 
 interface CaseRow {
@@ -1501,7 +1501,8 @@ async function processDecision(
 
 		await recordManagerEvent(env.DB, caseId, 'case_approved', `Approved and assigned to ${responsible.name}`);
 
-		const jiraConfig = jiraConfigFromEnv(env);
+		const caseScope=await env.DB.prepare(`SELECT tenant_id, project_id FROM coordination_cases WHERE id=? LIMIT 1`).bind(caseId).first<{tenant_id:number;project_id:number}>();
+		const jiraConfig = caseScope ? await jiraConfigForProject(env.DB,env,caseScope.tenant_id,caseScope.project_id) : null;
 		if (jiraConfig) {
 			try {
 				const jiraResult = await syncApprovedCaseToJira(

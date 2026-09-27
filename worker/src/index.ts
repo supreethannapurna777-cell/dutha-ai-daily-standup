@@ -57,6 +57,7 @@ import { employeePortalResponse } from "./employee-portal";
 import { settingsManagementResponse } from "./settings-management";
 import { duthaUiScriptResponse, publicLandingResponse } from "./ui";
 import { correctionManagementResponse } from "./correction-management";
+import { jiraConnectionManagementResponse } from "./jira-connection-management";
 
 export type { WorkerEnv } from "./env";
 
@@ -379,6 +380,10 @@ export default {
 
                 if (url.pathname === "/dashboard/corrections") {
                         return correctionManagementResponse(managementRequest, env);
+                }
+
+                if (url.pathname === "/dashboard/jira") {
+                        return jiraConnectionManagementResponse(managementRequest, env);
                 }
 
                 if (

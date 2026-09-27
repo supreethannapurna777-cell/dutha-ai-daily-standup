@@ -1,6 +1,7 @@
 import type { WorkerEnv } from "./env";
 import type { Fetcher } from "./whatsapp";
 import { loadAtlassianContext, type AtlassianMcpConfig } from "./atlassian-mcp";
+import { decryptIntegrationSecret } from "./integration-secrets";
 
 export interface JiraConfig {
         baseUrl: string;
@@ -48,6 +49,16 @@ export function jiraConfigFromEnv(env: WorkerEnv): JiraConfig | null {
                 projectKey,
                 issueType: env.JIRA_ISSUE_TYPE?.trim() || "Task",
         };
+}
+
+export async function jiraConfigForProject(db:D1Database, env:WorkerEnv, tenantId:number, projectId:number):Promise<JiraConfig|null> {
+        const stored=await db.prepare(`SELECT base_url, account_email, api_token_ciphertext, api_token_iv, project_key, issue_type, connection_status FROM project_jira_connections WHERE tenant_id=? AND project_id=? LIMIT 1`).bind(tenantId,projectId).first<{base_url:string;account_email:string;api_token_ciphertext:string;api_token_iv:string;project_key:string;issue_type:string;connection_status:string}>();
+        if (!stored) return jiraConfigFromEnv(env);
+        if (stored.connection_status!=='connected' || !env.INTEGRATION_ENCRYPTION_KEY) return null;
+        try {
+                const apiToken=await decryptIntegrationSecret(stored.api_token_ciphertext,stored.api_token_iv,env.INTEGRATION_ENCRYPTION_KEY,tenantId,projectId,'jira','api_token');
+                return {baseUrl:stored.base_url,email:stored.account_email,apiToken,projectKey:stored.project_key,issueType:stored.issue_type};
+        } catch { return null; }
 }
 
 function jiraDescription(item: JiraCase, atlassianContext?: string): object {
@@ -216,21 +227,23 @@ export async function syncApprovedCaseToJira(
 
 export async function retryPendingJiraSyncs(
 	db: D1Database,
-	config: JiraConfig,
+	config: JiraConfig | ((tenantId:number,projectId:number)=>Promise<JiraConfig|null>),
 	fetcher: Fetcher = fetch,
 	mcpConfig: AtlassianMcpConfig | null = null,
 ): Promise<JiraRetrySummary> {
         await db.prepare(`UPDATE jira_case_links SET sync_status = 'failed', last_error = 'Recovered stale Jira sync lease', updated_at = CURRENT_TIMESTAMP WHERE sync_status = 'syncing' AND updated_at < datetime('now', '-15 minutes')`).run();
         const candidates = await db.prepare(`
-                SELECT case_id FROM jira_case_links
+                SELECT case_id, tenant_id, project_id FROM jira_case_links
                 WHERE sync_status IN ('pending', 'failed') AND attempt_count < 5
                         AND (last_attempted_at IS NULL OR last_attempted_at < datetime('now', '-5 minutes'))
                 ORDER BY updated_at LIMIT 20
-        `).all<{ case_id: number }>();
+        `).all<{ case_id: number; tenant_id:number; project_id:number }>();
         let synced = 0;
         let failed = 0;
-        for (const candidate of candidates.results) {
-		const result = await syncApprovedCaseToJira(db, candidate.case_id, config, fetcher, mcpConfig);
+	for (const candidate of candidates.results) {
+		const projectConfig=typeof config==='function' ? await config(candidate.tenant_id,candidate.project_id) : config;
+		if (!projectConfig) continue;
+		const result = await syncApprovedCaseToJira(db, candidate.case_id, projectConfig, fetcher, mcpConfig);
                 if (result.status === "synced" || result.status === "already_synced") synced += 1;
                 else if (result.status === "failed") failed += 1;
         }

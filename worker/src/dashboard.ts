@@ -764,6 +764,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
                                         Needs action
                                 </a>`}
 				${principal.role === 'team_lead' ? '' : `<a href="/dashboard/corrections?project=${requestedProject}">Employee corrections</a>`}
+				${['admin','ceo','project_manager'].includes(principal.role) ? `<a href="/dashboard/jira?project=${requestedProject}">Jira connection</a>` : ''}
 
 								${['admin', 'ceo', 'portfolio_leader'].includes(principal.role) ? '<a href="/dashboard?view=overview">Company view</a>' : ''}
 

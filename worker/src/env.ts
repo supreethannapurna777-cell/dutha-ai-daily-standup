@@ -23,6 +23,7 @@ export interface WorkerEnv {
 	JIRA_PROJECT_KEY?: string;
 	JIRA_ISSUE_TYPE?: string;
 	JIRA_WEBHOOK_SECRET?: string;
+	INTEGRATION_ENCRYPTION_KEY?: string;
 	ATLASSIAN_MCP_URL?: string;
 	ATLASSIAN_MCP_EMAIL?: string;
 	ATLASSIAN_MCP_API_TOKEN?: string;
