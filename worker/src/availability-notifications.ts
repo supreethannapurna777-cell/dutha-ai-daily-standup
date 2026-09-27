@@ -126,6 +126,7 @@ export async function sendCaseAvailabilityRequests(
                         SELECT
                                 member.id,
                                 member.tenant_id AS tenantId,
+                                coordination.project_id AS projectId,
                                 member.name,
                                 member.phone,
                                 member.department,
@@ -223,6 +224,7 @@ export async function sendCaseAvailabilityRequests(
                                         recipient.timezone,
                                 ),
                                 fetcher,
+                                recipient.projectId,
                         );
 
                         await recordSend(

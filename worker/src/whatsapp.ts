@@ -1,5 +1,6 @@
 import type { WorkerEnv } from "./env";
 import { whatsappCredentialsForTenant } from "./whatsapp-connection";
+import { projectWhatsAppTemplate } from './whatsapp-template-management';
 
 
 export interface TeamMember {
@@ -8,6 +9,7 @@ export interface TeamMember {
 	phone: string;
 	department: string;
 	tenantId?: number;
+	projectId?: number;
 }
 
 
@@ -87,14 +89,18 @@ export async function sendTemplateMessage(
 	parameters: string[],
 	fetcher: Fetcher = fetch,
 	tenantId?: number,
+	workflow?: 'initial'|'reminder'|'availability'|'meeting',
+	projectId?: number,
 ): Promise<SendResult> {
 	const phone = normalisePhone(recipient);
 	const credentials = await whatsappCredentialsForTenant(env, tenantId);
+	const mapped = tenantId && workflow ? await projectWhatsAppTemplate(env.DB,tenantId,projectId,workflow) : null;
+	const selectedTemplateName = mapped?.template_name ?? templateName;
 
 	if (
 		!credentials ||
 		!phone ||
-		!templateName
+		!selectedTemplateName
 	) {
 		return {
 			success: false,
@@ -108,9 +114,9 @@ export async function sendTemplateMessage(
 		to: phone,
 		type: "template",
 		template: {
-			name: templateName,
+			name: selectedTemplateName,
 			language: {
-				code: env.WHATSAPP_TEMPLATE_LANGUAGE,
+				code: mapped?.language_code ?? env.WHATSAPP_TEMPLATE_LANGUAGE,
 			},
 			components: [
 				{
@@ -203,6 +209,8 @@ export function sendInitialRequest(
 		[member.name],
 		fetcher,
 		member.tenantId,
+		'initial',
+		member.projectId,
 	);
 }
 
@@ -225,6 +233,8 @@ export function sendReminder(
 		[member.name, timing],
 		fetcher,
 		member.tenantId,
+		'reminder',
+		member.projectId,
 	);
 }
 
@@ -235,6 +245,7 @@ export function sendAvailabilityRequest(
 	caseId: number,
 	optionsText: string,
 	fetcher: Fetcher = fetch,
+	projectId?: number,
 ): Promise<SendResult> {
 	// Meta rejects line breaks, tabs, and long runs of spaces inside a
 	// template parameter (#132018). Keep the options readable but pass them
@@ -256,18 +267,21 @@ export function sendAvailabilityRequest(
 		],
 		fetcher,
 		member.tenantId,
+	'availability',
+	projectId ?? member.projectId,
 	);
 }
 
 
 export function sendMeetingScheduled(
 	env: WorkerEnv,
-	member: Pick<TeamMember, "name" | "phone"> & Partial<Pick<TeamMember, "tenantId">>,
+	member: Pick<TeamMember, "name" | "phone"> & Partial<Pick<TeamMember, "tenantId" | "projectId">>,
 	caseId: number,
 	meetingTime: string,
 	durationMinutes: number,
 	meetingLink: string,
 	fetcher: Fetcher = fetch,
+	projectId?: number,
 ): Promise<SendResult> {
 	return sendTemplateMessage(
 		env,
@@ -282,5 +296,7 @@ export function sendMeetingScheduled(
 		],
 		fetcher,
 		member.tenantId,
+	'meeting',
+	projectId ?? member.projectId,
 	);
 }

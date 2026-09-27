@@ -150,6 +150,7 @@ async function getScheduledMembers(
                         SELECT
                                 id,
                                 tenant_id AS tenantId,
+                                COALESCE(primary_project_id,(SELECT project_id FROM team_member_projects AS membership WHERE membership.team_member_id=team_members.id ORDER BY project_id LIMIT 1)) AS projectId,
                                 name,
                                 phone,
                                 department,
@@ -419,7 +420,7 @@ export async function runProjectInitialNow(
         fetcher: Fetcher = fetch,
 ): Promise<ManualStandupResult> {
         const result = await env.DB.prepare(`
-                        SELECT member.id, member.tenant_id AS tenantId, member.name, member.phone, member.department,
+                        SELECT member.id, member.tenant_id AS tenantId, ? AS projectId, member.name, member.phone, member.department,
                         member.timezone, member.working_days, member.initial_time,
                         member.reminder_1_time, member.reminder_2_time
                 FROM team_members AS member
@@ -436,7 +437,7 @@ export async function runProjectInitialNow(
                                 )
                         )
                 ORDER BY member.name
-        `).bind(tenantId, projectId, projectId).all<ScheduledTeamMember>();
+        `).bind(projectId, tenantId, projectId, projectId).all<ScheduledTeamMember>();
 
         const members = result.results;
         let sent = 0;
@@ -478,7 +479,7 @@ export async function runDepartmentInitialNow(
         fetcher: Fetcher = fetch,
 ): Promise<ManualStandupResult> {
         const result = await env.DB.prepare(`
-                SELECT member.id, member.tenant_id AS tenantId, member.name, member.phone, member.department,
+                SELECT member.id, member.tenant_id AS tenantId, ? AS projectId, member.name, member.phone, member.department,
                         member.timezone, member.working_days, member.initial_time,
                         member.reminder_1_time, member.reminder_2_time
                 FROM team_members AS member
@@ -496,7 +497,7 @@ export async function runDepartmentInitialNow(
                                 )
                         )
                 ORDER BY member.name
-        `).bind(tenantId, department, projectId, projectId).all<ScheduledTeamMember>();
+        `).bind(projectId, tenantId, department, projectId, projectId).all<ScheduledTeamMember>();
 
         const members = result.results;
         let sent = 0;

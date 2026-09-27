@@ -7,6 +7,7 @@ import { atlassianMcpConfigFromEnv } from './atlassian-mcp';
 interface CaseRow {
 	id: number;
 	tenant_id: number;
+	project_id: number;
 	requester_member_id: number;
 	requester_name: string;
 	responsible_member_id: number | null;
@@ -111,6 +112,7 @@ async function getCases(db: D1Database, tenantId: number, projectId: number): Pr
                         SELECT
                                 coordination.id,
 				coordination.tenant_id,
+				coordination.project_id,
                                 coordination.requester_member_id,
                                 requester.name
                                         AS requester_name,
@@ -1124,6 +1126,7 @@ async function getCase(db: D1Database, caseId: number, tenantId: number, project
                         SELECT
                                 coordination.id,
 				coordination.tenant_id,
+				coordination.project_id,
                                 coordination.requester_member_id,
                                 requester.name
                                         AS requester_name,
@@ -1353,6 +1356,7 @@ async function notifyParticipants(
 			coordinationCase.meeting_duration_minutes,
 			meetingLink,
 			fetcher,
+			coordinationCase.project_id,
 		);
 
 		if (!result.success) {

@@ -18,7 +18,7 @@ describe('company WhatsApp connection', () => {
 	});
 
 	it('verifies the Meta phone ID and saves the token encrypted for that tenant', async () => {
-		const form = new FormData(); form.set('phone_number_id','123456789012'); form.set('access_token','a-long-secret-meta-access-token');
+		const form = new FormData(); form.set('phone_number_id','123456789012'); form.set('waba_id','987654321098'); form.set('access_token','a-long-secret-meta-access-token');
 		let called = '';
 		const response = await whatsappConnectionResponse(request('POST',form),testEnv,async (input,init) => {
 			called = String(input);
@@ -27,8 +27,9 @@ describe('company WhatsApp connection', () => {
 		});
 		expect(response.status).toBe(303);
 		expect(called).toContain('/v26.0/123456789012?fields=id,display_phone_number,verified_name');
-		const stored = await env.DB.prepare('SELECT phone_number_id,access_token_ciphertext,connection_status FROM organisation_whatsapp_connections WHERE tenant_id=1').first<{phone_number_id:string;access_token_ciphertext:string;connection_status:string}>();
+		const stored = await env.DB.prepare('SELECT phone_number_id,waba_id,access_token_ciphertext,connection_status FROM organisation_whatsapp_connections WHERE tenant_id=1').first<{phone_number_id:string;waba_id:string;access_token_ciphertext:string;connection_status:string}>();
 		expect(stored?.phone_number_id).toBe('123456789012');
+		expect(stored?.waba_id).toBe('987654321098');
 		expect(stored?.connection_status).toBe('connected');
 		expect(stored?.access_token_ciphertext).not.toContain('a-long-secret-meta-access-token');
 		expect(await whatsappCredentialsForTenant(testEnv,1)).toEqual({accessToken:'a-long-secret-meta-access-token',phoneNumberId:'123456789012'});

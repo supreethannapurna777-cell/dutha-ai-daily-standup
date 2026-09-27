@@ -61,6 +61,7 @@ import { duthaUiScriptResponse, publicLandingResponse } from "./ui";
 import { correctionManagementResponse } from "./correction-management";
 import { jiraConnectionManagementResponse } from "./jira-connection-management";
 import { whatsappConnectionResponse } from "./whatsapp-connection";
+import { whatsappTemplateManagementResponse } from "./whatsapp-template-management";
 
 export type { WorkerEnv } from "./env";
 
@@ -374,6 +375,10 @@ export default {
 
 		if (url.pathname === "/dashboard/whatsapp") {
 			return whatsappConnectionResponse(managementRequest, env);
+		}
+
+		if (url.pathname === "/dashboard/whatsapp/templates") {
+			return whatsappTemplateManagementResponse(managementRequest, env);
 		}
 
                 if (

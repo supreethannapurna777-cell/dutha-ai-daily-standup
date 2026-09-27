@@ -7,7 +7,7 @@ export interface WhatsAppCredentials {
 	phoneNumberId: string;
 }
 
-type Stored = { phone_number_id: string; access_token_ciphertext: string; access_token_iv: string; connection_status: string; last_verified_at: string };
+type Stored = { phone_number_id: string; waba_id: string | null; access_token_ciphertext: string; access_token_iv: string; connection_status: string; last_verified_at: string };
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 const esc = (value: unknown) => String(value ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
 
@@ -45,7 +45,7 @@ export async function whatsappConnectionResponse(request: Request, env: WorkerEn
 	const url = new URL(request.url);
 	let message = url.searchParams.has('saved') ? 'WhatsApp connection verified and saved. Outgoing messages for this company now use its own sender.' : '';
 	let error = '';
-	let existing = await env.DB.prepare('SELECT phone_number_id, connection_status, last_verified_at FROM organisation_whatsapp_connections WHERE tenant_id=?').bind(actor.tenantId).first<Pick<Stored,'phone_number_id'|'connection_status'|'last_verified_at'>>();
+	let existing = await env.DB.prepare('SELECT phone_number_id,waba_id,connection_status,last_verified_at FROM organisation_whatsapp_connections WHERE tenant_id=?').bind(actor.tenantId).first<Pick<Stored,'phone_number_id'|'waba_id'|'connection_status'|'last_verified_at'>>();
 	if (request.method === 'POST') {
 		if (!sameOrigin(request)) return new Response('Invalid request origin.',{status:403});
 		const form = await request.formData();
@@ -55,8 +55,9 @@ export async function whatsappConnectionResponse(request: Request, env: WorkerEn
 		}
 		if (!env.INTEGRATION_ENCRYPTION_KEY) error = 'Integration encryption is not configured. Set the INTEGRATION_ENCRYPTION_KEY Worker secret first.';
 		const phoneNumberId = String(form.get('phone_number_id') ?? '').trim();
+		const wabaId = String(form.get('waba_id') ?? '').trim() || existing?.waba_id || '';
 		let accessToken = String(form.get('access_token') ?? '').trim();
-		if (!error && (!/^\d{5,30}$/.test(phoneNumberId) || accessToken.length > 4096)) error = 'Enter a valid Meta Phone Number ID and access token.';
+		if (!error && (!/^\d{5,30}$/.test(phoneNumberId) || (wabaId && !/^\d{5,30}$/.test(wabaId)) || accessToken.length > 4096)) error = 'Enter valid Meta Phone Number ID and WhatsApp Business Account ID values.';
 		if (!error && !accessToken && existing && env.INTEGRATION_ENCRYPTION_KEY) {
 			const encrypted = await env.DB.prepare('SELECT access_token_ciphertext,access_token_iv FROM organisation_whatsapp_connections WHERE tenant_id=? AND connection_status=\'connected\'').bind(actor.tenantId).first<{access_token_ciphertext:string;access_token_iv:string}>();
 			if (encrypted) try { accessToken = await decryptIntegrationSecret(encrypted.access_token_ciphertext,encrypted.access_token_iv,env.INTEGRATION_ENCRYPTION_KEY,actor.tenantId,0,'whatsapp','access_token'); } catch { error = 'Saved token could not be decrypted. Enter the access token again.'; }
@@ -78,12 +79,16 @@ export async function whatsappConnectionResponse(request: Request, env: WorkerEn
 		if (!error) {
 			const claimed = await env.DB.prepare("SELECT tenant_id FROM organisation_whatsapp_connections WHERE phone_number_id=? AND connection_status='connected' AND tenant_id<>? LIMIT 1").bind(phoneNumberId,actor.tenantId).first<{tenant_id:number}>();
 			if (claimed) error = 'This Meta phone number is already connected to another company workspace.';
+			if (!error && wabaId) {
+				const claimedWaba = await env.DB.prepare("SELECT tenant_id FROM organisation_whatsapp_connections WHERE waba_id=? AND connection_status='connected' AND tenant_id<>? LIMIT 1").bind(wabaId,actor.tenantId).first<{tenant_id:number}>();
+				if (claimedWaba) error = 'This WhatsApp Business Account is already connected to another company workspace.';
+			}
 		}
 		if (!error && env.INTEGRATION_ENCRYPTION_KEY) {
 			const encrypted = await encryptIntegrationSecret(accessToken,env.INTEGRATION_ENCRYPTION_KEY,actor.tenantId,0,'whatsapp','access_token');
 			const verifiedAt = new Date().toISOString();
 			await env.DB.batch([
-				env.DB.prepare(`INSERT INTO organisation_whatsapp_connections (tenant_id,phone_number_id,access_token_ciphertext,access_token_iv,connection_status,last_verified_at,configured_by_management_user_id) VALUES (?,?,?,?,'connected',?,?) ON CONFLICT(tenant_id) DO UPDATE SET phone_number_id=excluded.phone_number_id,access_token_ciphertext=excluded.access_token_ciphertext,access_token_iv=excluded.access_token_iv,connection_status='connected',last_verified_at=excluded.last_verified_at,configured_by_management_user_id=excluded.configured_by_management_user_id,updated_at=CURRENT_TIMESTAMP`).bind(actor.tenantId,phoneNumberId,encrypted.ciphertext,encrypted.iv,verifiedAt,actor.userId),
+				env.DB.prepare(`INSERT INTO organisation_whatsapp_connections (tenant_id,phone_number_id,waba_id,access_token_ciphertext,access_token_iv,connection_status,last_verified_at,configured_by_management_user_id) VALUES (?,?,?,?,?,'connected',?,?) ON CONFLICT(tenant_id) DO UPDATE SET phone_number_id=excluded.phone_number_id,waba_id=COALESCE(excluded.waba_id,organisation_whatsapp_connections.waba_id),access_token_ciphertext=excluded.access_token_ciphertext,access_token_iv=excluded.access_token_iv,connection_status='connected',last_verified_at=excluded.last_verified_at,configured_by_management_user_id=excluded.configured_by_management_user_id,updated_at=CURRENT_TIMESTAMP`).bind(actor.tenantId,phoneNumberId,wabaId||null,encrypted.ciphertext,encrypted.iv,verifiedAt,actor.userId),
 				...(verifiedBusinessNumber ? [env.DB.prepare(`INSERT INTO organisation_connection_profiles (tenant_id,whatsapp_business_name,whatsapp_business_number) VALUES (?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET whatsapp_business_name=excluded.whatsapp_business_name,whatsapp_business_number=excluded.whatsapp_business_number,updated_at=CURRENT_TIMESTAMP`).bind(actor.tenantId,verifiedBusinessName || null,verifiedBusinessNumber)] : []),
 			]);
 			return new Response(null,{status:303,headers:{Location:'/dashboard/whatsapp?saved=1','Cache-Control':'no-store'}});
@@ -91,9 +96,9 @@ export async function whatsappConnectionResponse(request: Request, env: WorkerEn
 		message = '';
 	}
 	if (url.searchParams.has('disconnected')) message = 'Company WhatsApp sender disconnected.';
-	existing = await env.DB.prepare('SELECT phone_number_id, connection_status, last_verified_at FROM organisation_whatsapp_connections WHERE tenant_id=?').bind(actor.tenantId).first<Pick<Stored,'phone_number_id'|'connection_status'|'last_verified_at'>>();
+	existing = await env.DB.prepare('SELECT phone_number_id,waba_id,connection_status,last_verified_at FROM organisation_whatsapp_connections WHERE tenant_id=?').bind(actor.tenantId).first<Pick<Stored,'phone_number_id'|'waba_id'|'connection_status'|'last_verified_at'>>();
 	const notice = message ? `<p class="notice">${esc(message)}</p>` : '';
 	const alert = error ? `<p class="error">${esc(error)}</p>` : '';
 	const status = existing?.connection_status === 'connected' ? `<span class="pill connected">Connected · verified ${esc(existing.last_verified_at)}</span>` : '<span class="pill">Needs setup</span>';
-	return html(`<header class="head"><div><div class="eyebrow">COMPANY WHATSAPP SENDER</div><h1>Connect WhatsApp Business</h1><p class="muted">Connect the company’s own Meta WhatsApp Cloud API sender. Credentials are verified before saving and encrypted in D1 using the Worker’s integration key.</p></div><a class="button secondary" href="/dashboard/settings">Connection hub</a></header>${notice}${alert}<section class="card"><div class="head"><div><h2>WhatsApp Cloud API</h2><p class="muted">${existing?.connection_status==='connected'?'Saved token is protected and will not be displayed. Re-enter a new token only when rotating it.':'Your company’s Meta Business account must grant this app access to its WhatsApp Business Account.'}</p></div>${status}</div><form method="post"><input type="hidden" name="action" value="save"><label>Phone Number ID<input name="phone_number_id" inputmode="numeric" pattern="[0-9]{5,30}" value="${esc(existing?.phone_number_id)}" required></label><label>Permanent access token<input name="access_token" type="password" autocomplete="new-password" maxlength="4096" placeholder="${existing?.connection_status==='connected'?'Leave blank to keep saved token':'Paste Meta system-user access token'}" ${existing?.connection_status==='connected'?'':'required'}></label><p class="muted">Find the Phone Number ID in Meta WhatsApp Manager → API Setup. Use a system-user token with WhatsApp messaging permissions. Do not paste the token into chat. The shared Meta app webhook and signature secret must also be configured in Cloudflare.</p><div class="actions"><button type="submit">Verify and save connection</button></div></form>${existing?.connection_status==='connected'?'<form method="post" class="actions"><input type="hidden" name="action" value="disconnect"><button class="secondary" type="submit">Disconnect company sender</button></form>':''}</section>`,error?400:200);
+	return html(`<header class="head"><div><div class="eyebrow">COMPANY WHATSAPP SENDER</div><h1>Connect WhatsApp Business</h1><p class="muted">Connect the company’s own Meta WhatsApp Cloud API sender. Credentials are verified before saving and encrypted in D1 using the Worker’s integration key.</p></div><div class="actions"><a class="button secondary" href="/dashboard/whatsapp/templates">Template workspace</a><a class="button secondary" href="/dashboard/settings">Connection hub</a></div></header>${notice}${alert}<section class="card"><div class="head"><div><h2>WhatsApp Cloud API</h2><p class="muted">${existing?.connection_status==='connected'?'Saved token is protected and will not be displayed. Re-enter a new token only when rotating it.':'Your company’s Meta Business account must grant this app access to its WhatsApp Business Account.'}</p></div>${status}</div><form method="post"><input type="hidden" name="action" value="save"><label>Phone Number ID<input name="phone_number_id" inputmode="numeric" pattern="[0-9]{5,30}" value="${esc(existing?.phone_number_id)}" required></label><label>WhatsApp Business Account ID (needed for template management)<input name="waba_id" inputmode="numeric" pattern="[0-9]{5,30}" value="${esc(existing?.waba_id)}" placeholder="Find it in Meta Business Settings"></label><label>Permanent access token<input name="access_token" type="password" autocomplete="new-password" maxlength="4096" placeholder="${existing?.connection_status==='connected'?'Leave blank to keep saved token':'Paste Meta system-user access token'}" ${existing?.connection_status==='connected'?'':'required'}></label><p class="muted">Find the Phone Number ID in Meta WhatsApp Manager → API Setup. Template management also needs access to the company WABA with WhatsApp Business Management permission. Do not paste the token into chat.</p><div class="actions"><button type="submit">Verify and save connection</button></div></form>${existing?.connection_status==='connected'?'<form method="post" class="actions"><input type="hidden" name="action" value="disconnect"><button class="secondary" type="submit">Disconnect company sender</button></form>':''}</section>`,error?400:200);
 }
