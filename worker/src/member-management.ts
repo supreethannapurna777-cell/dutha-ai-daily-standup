@@ -246,17 +246,7 @@ function memberCard(member: ManagedMember): string {
                                 </div>
                         </fieldset>
 
-                        <div class="toggles">
-                                <label>
-                                        <input
-                                                type="checkbox"
-                                                name="active"
-                                                value="1"
-                                                ${member.active ? 'checked' : ''}
-                                        >
-                                        Active team member
-                                </label>
-
+				<div class="toggles">
                                 <label>
                                         <input
                                                 type="checkbox"
@@ -268,10 +258,11 @@ function memberCard(member: ManagedMember): string {
                                 </label>
                         </div>
 
-                        <button type="submit">
-                                Save member schedule
-                        </button>
+		<button type="submit">
+						Save member schedule
+					</button>
 		</form>
+		<details class="member-actions"><summary>••• Actions</summary><div class="member-action-panel"><p>${member.active ? 'Remove from active scheduling. The member account and history stay available.' : 'Restore this member to active status. Automated messages stay off until enabled again in their schedule.'}</p><form method="post"><input type="hidden" name="action" value="${member.active ? 'remove_member' : 'restore_member'}"><input type="hidden" name="member_id" value="${member.id}">${member.active ? `<label>Type ${escapeHtml(member.name)} to confirm<input name="confirm_name" required autocomplete="off"></label><button class="danger-action" type="submit">Remove member</button>` : '<button type="submit">Restore member</button>'}</form></div></details>
 	</details>
         `;
 }
@@ -379,6 +370,7 @@ function page(members: ManagedMember[], message: string | null, error: string | 
 			margin:0;padding:17px 20px;cursor:pointer;list-style:none;
                 }
 		.member-form{padding:0 20px 20px;border-top:1px solid #273449}
+		.member-actions{padding:0 20px 16px;position:relative}.member-actions>summary{cursor:pointer;color:#93c5fd;font-weight:800;list-style:none}.member-actions>summary::-webkit-details-marker{display:none}.member-action-panel{max-width:440px;padding:14px;margin-top:8px;background:#0b1220;border:1px solid #334155;border-radius:12px}.member-action-panel p{color:#94a3b8}.member-action-panel form{display:grid;gap:10px}.danger-action{background:#991b1b}
 
                 .status {
                         padding: 5px 10px;
@@ -723,8 +715,6 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
 
 	const workingDays = normaliseWorkingDays(form);
 
-	const active = form.get('active') === '1' ? 1 : 0;
-
 	const schedulingEnabled = form.get('scheduling_enabled') === '1' ? 1 : 0;
 
 	if (!Number.isInteger(memberId) || memberId <= 0) {
@@ -759,7 +749,6 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
                                 initial_time = ?,
                                 reminder_1_time = ?,
                                 reminder_2_time = ?,
-                                active = ?,
                                 scheduling_enabled = ?
                         WHERE id = ? AND tenant_id = ?
                                 AND (? IS NULL OR department = ?)
@@ -779,7 +768,6 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
 			initialTime,
 			reminder1Time,
 			reminder2Time,
-			active,
 			schedulingEnabled,
 			memberId,
 			principal.tenantId,
@@ -794,6 +782,21 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
 		return 'Team member was not found.';
 	}
 
+	return null;
+}
+
+async function setMemberActive(form: FormData, env: WorkerEnv, principal: ManagementPrincipal, projectId: number, departmentScope: string | null, active: 0 | 1): Promise<string | null> {
+	const memberId = Number(form.get('member_id'));
+	if (!Number.isSafeInteger(memberId) || memberId <= 0) return 'Invalid team member.';
+	const member = await env.DB.prepare(`
+		SELECT id, name FROM team_members WHERE id=? AND tenant_id=?
+		AND (? IS NULL OR department=?)
+		AND (primary_project_id=? OR EXISTS (SELECT 1 FROM team_member_projects WHERE team_member_id=team_members.id AND project_id=?))
+		LIMIT 1
+	`).bind(memberId, principal.tenantId, departmentScope, departmentScope, projectId, projectId).first<{id:number;name:string}>();
+	if (!member) return 'Team member was not found in this project or team.';
+	if (active === 0 && String(form.get('confirm_name') ?? '').trim() !== member.name) return 'Type the member name exactly to confirm removal.';
+	await env.DB.prepare(`UPDATE team_members SET active=?, scheduling_enabled=CASE WHEN ?=0 THEN 0 ELSE scheduling_enabled END WHERE id=? AND tenant_id=?`).bind(active, active, memberId, principal.tenantId).run();
 	return null;
 }
 
@@ -857,6 +860,9 @@ export async function memberManagementResponse(request: Request, env: WorkerEnv)
 		}
 	} else if (action === 'update') {
 		error = await updateMember(form, env, principal, projectId, departmentScope);
+		redirectValue = 'member';
+	} else if (action === 'remove_member' || action === 'restore_member') {
+		error = await setMemberActive(form, env, principal, projectId, departmentScope, action === 'remove_member' ? 0 : 1);
 		redirectValue = 'member';
 	} else if (action === 'send_now') {
 		if (env.AUTOMATION_ENABLED !== 'true') {

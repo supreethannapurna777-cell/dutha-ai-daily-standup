@@ -97,6 +97,14 @@ describe("project and access management", () => {
                 expect(response.status).toBe(403);
         });
 
+	it('allows the CEO to manage company access controls', async () => {
+		const response = await projectManagementResponse(request('GET', undefined, {
+			'X-Dutha-User-Id':'1', 'X-Dutha-Tenant-Id':'1', 'X-Dutha-Tenant-Role':'ceo',
+		}), testEnv);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain('Projects and access');
+	});
+
         it("cannot assign a member from another tenant", async () => {
                 const tenant = await env.DB.prepare(`
                         INSERT INTO tenants (slug, name) VALUES ('other-company', 'Other Company')
@@ -214,5 +222,46 @@ describe("project and access management", () => {
 		);
 		expect(response.status).toBe(400);
 		expect(await response.text()).toContain("Team was not found.");
+	});
+
+	it("archives a project only after exact key confirmation and can restore it", async () => {
+		const create = await env.DB.prepare(`INSERT INTO projects (tenant_id, project_key, name) VALUES (1, 'ARCHIVE-ME', 'Archive Me') RETURNING id`).first<{id:number}>();
+		const rejected = await projectManagementResponse(request('POST', `action=archive_project&project_id=${create!.id}&confirm_key=wrong`), testEnv);
+		expect(rejected.status).toBe(400);
+		const accepted = await projectManagementResponse(request('POST', `action=archive_project&project_id=${create!.id}&confirm_key=ARCHIVE-ME`), testEnv);
+		expect(accepted.status).toBe(303);
+		let row = await env.DB.prepare(`SELECT active FROM projects WHERE id=?`).bind(create!.id).first<{active:number}>();
+		expect(row?.active).toBe(0);
+		await projectManagementResponse(request('POST', `action=restore_project&project_id=${create!.id}`), testEnv);
+		row = await env.DB.prepare(`SELECT active FROM projects WHERE id=?`).bind(create!.id).first<{active:number}>();
+		expect(row?.active).toBe(1);
+	});
+
+	it("deactivates and restores a management user without removing the seeded admin", async () => {
+		const user = await env.DB.prepare(`INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role) VALUES (1, 'deactivate@example.com', 'Deactivate Me', 'deactivate@example.com', 'project_manager') RETURNING id`).first<{id:number}>();
+		const wrong = await projectManagementResponse(request('POST', `action=deactivate_manager&management_user_id=${user!.id}&confirm_name=wrong`), testEnv);
+		expect(wrong.status).toBe(400);
+		const removed = await projectManagementResponse(request('POST', `action=deactivate_manager&management_user_id=${user!.id}&confirm_name=Deactivate+Me`), testEnv);
+		expect(removed.status).toBe(303);
+		let row = await env.DB.prepare(`SELECT active FROM management_users WHERE id=?`).bind(user!.id).first<{active:number}>();
+		expect(row?.active).toBe(0);
+		await projectManagementResponse(request('POST', `action=restore_manager&management_user_id=${user!.id}`), testEnv);
+		row = await env.DB.prepare(`SELECT active FROM management_users WHERE id=?`).bind(user!.id).first<{active:number}>();
+		expect(row?.active).toBe(1);
+		const admin = await env.DB.prepare(`SELECT active FROM management_users WHERE id=1`).first<{active:number}>();
+		expect(admin?.active).toBe(1);
+	});
+
+	it("archives a team by pausing its active members and removing its lead assignment", async () => {
+		const member = await env.DB.prepare(`INSERT INTO team_members (name, phone, department, tenant_id, primary_project_id, active, scheduling_enabled) VALUES ('Archive Team Member', 'archive-team-member', 'Archive Team', 1, 1, 1, 1) RETURNING id`).first<{id:number}>();
+		const lead = await env.DB.prepare(`INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role, workops_role) VALUES (1, 'archive-lead@example.com', 'Archive Lead', 'archive-lead@example.com', 'project_manager', 'team_lead') RETURNING id`).first<{id:number}>();
+		await env.DB.prepare(`INSERT INTO team_lead_assignments (project_id, management_user_id, department) VALUES (1, ?, 'Archive Team')`).bind(lead!.id).run();
+		const wrong = await projectManagementResponse(request('POST', 'action=archive_team&department=Archive+Team&confirm_department=wrong'), testEnv);
+		expect(wrong.status).toBe(400);
+		await projectManagementResponse(request('POST', 'action=archive_team&department=Archive+Team&confirm_department=Archive+Team'), testEnv);
+		const archived = await env.DB.prepare(`SELECT active, scheduling_enabled FROM team_members WHERE id=?`).bind(member!.id).first<{active:number;scheduling_enabled:number}>();
+		expect(archived).toEqual({active:0,scheduling_enabled:0});
+		const assignment = await env.DB.prepare(`SELECT 1 AS found FROM team_lead_assignments WHERE management_user_id=?`).bind(lead!.id).first();
+		expect(assignment).toBeNull();
 	});
 });

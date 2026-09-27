@@ -161,6 +161,18 @@ describe("member schedule management", () => {
                 );
         });
 
+	it("requires the member name to remove them and restores without restarting automation", async () => {
+		const rejected = await memberManagementResponse(authorisedRequest('POST', new URLSearchParams({ action:'remove_member', member_id:String(existingMemberId), confirm_name:'wrong' })), managementEnv);
+		expect(rejected.status).toBe(400);
+		const removed = await memberManagementResponse(authorisedRequest('POST', new URLSearchParams({ action:'remove_member', member_id:String(existingMemberId), confirm_name:'Supreeth' })), managementEnv);
+		expect(removed.status).toBe(303);
+		let member = await env.DB.prepare(`SELECT active, scheduling_enabled FROM team_members WHERE id=?`).bind(existingMemberId).first<{active:number;scheduling_enabled:number}>();
+		expect(member).toEqual({active:0,scheduling_enabled:0});
+		await memberManagementResponse(authorisedRequest('POST', new URLSearchParams({ action:'restore_member', member_id:String(existingMemberId) })), managementEnv);
+		member = await env.DB.prepare(`SELECT active, scheduling_enabled FROM team_members WHERE id=?`).bind(existingMemberId).first<{active:number;scheduling_enabled:number}>();
+		expect(member).toEqual({active:1,scheduling_enabled:0});
+	});
+
         it("updates timezone and schedule safely", async () => {
                 const body = new URLSearchParams({
                         action: "update",

@@ -101,7 +101,17 @@ async function validSession(request: Request, env: WorkerEnv): Promise<SessionPr
 	const expires = Number(expiresText);
 	if (!Number.isSafeInteger(userId) || userId <= 0 || !Number.isSafeInteger(tenantId) || tenantId <= 0 || !['admin', 'ceo', 'portfolio_leader', 'project_manager', 'team_lead'].includes(roleText) || !Number.isSafeInteger(expires) || expires <= Math.floor(Date.now() / 1000)) return null;
 	const payload = `${userText}.${tenantText}.${roleText}.${expiresText}`;
-	return safeEqual(suppliedSignature, await signature(payload, secret)) ? { userId, tenantId, role: roleText as SessionPrincipal['role'] } : null;
+	if (!safeEqual(suppliedSignature, await signature(payload, secret))) return null;
+	const current = await env.DB.prepare(`
+		SELECT id, tenant_id, COALESCE(workops_role, tenant_role) AS role
+		FROM management_users WHERE id=? AND tenant_id=? AND active=1 LIMIT 1
+	`).bind(userId, tenantId).first<{ id:number; tenant_id:number; role:SessionPrincipal['role'] }>();
+	// Recheck account state on every request so deactivation takes effect for
+	// existing sessions immediately; also apply role changes without waiting
+	// for the signed session cookie to expire.
+	return current && ['admin', 'ceo', 'portfolio_leader', 'project_manager', 'team_lead'].includes(current.role)
+		? { userId: current.id, tenantId: current.tenant_id, role: current.role }
+		: null;
 }
 
 export async function authenticatedManagementRequest(request: Request, env: WorkerEnv): Promise<Request | null> {

@@ -766,6 +766,7 @@ export async function createDashboardResponse(request: Request, env: WorkerEnv, 
 				${principal.role === 'team_lead' ? '' : `<a href="/dashboard/corrections?project=${requestedProject}">Employee corrections</a>`}
 				${['admin','ceo','project_manager'].includes(principal.role) ? `<a href="/dashboard/jira?project=${requestedProject}">Jira connection</a>` : ''}
 				${['admin','ceo','project_manager'].includes(principal.role) ? `<a href="/dashboard/whatsapp/templates?project=${requestedProject}">WhatsApp templates</a>` : ''}
+				${['admin','ceo'].includes(principal.role) ? '<a href="/dashboard/projects">Projects &amp; access</a>' : ''}
 
 								${['admin', 'ceo', 'portfolio_leader'].includes(principal.role) ? '<a href="/dashboard?view=overview">Company view</a>' : ''}
 

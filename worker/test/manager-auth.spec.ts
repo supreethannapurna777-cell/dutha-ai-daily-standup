@@ -60,6 +60,17 @@ describe('individual management authentication', () => {
 		expect(accepted.status).toBe(303);
 	});
 
+	it('invalidates an already-open management session as soon as the account is deactivated', async () => {
+		const manager = await env.DB.prepare(`INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role) VALUES (1, 'session-revoke@example.com', 'Session Revoked', 'session-revoke@example.com', 'project_manager') RETURNING id`).first<{id:number}>();
+		const activation = await createManagerActivation(env.DB, manager!.id);
+		await managerActivationResponse(post('/manager/activate', { token:activation, password:'StrongPassword123', confirm_password:'StrongPassword123' }), authEnv);
+		const login = await loginResponse(post('/login', { username:'session-revoke@example.com', password:'StrongPassword123', next:'/dashboard' }), authEnv);
+		const cookie = (login.headers.get('Set-Cookie') ?? '').split(';')[0];
+		expect(await authenticatedManagementRequest(new Request('https://example.com/dashboard', { headers:{Cookie:cookie} }), authEnv)).not.toBeNull();
+		await env.DB.prepare(`UPDATE management_users SET active=0 WHERE id=?`).bind(manager!.id).run();
+		expect(await authenticatedManagementRequest(new Request('https://example.com/dashboard', { headers:{Cookie:cookie} }), authEnv)).toBeNull();
+	});
+
 	it('creates a one-time reset link without revealing whether an email exists', async () => {
 		const manager = await env.DB.prepare(`
 			INSERT INTO management_users (tenant_id, external_subject, display_name, email, tenant_role)

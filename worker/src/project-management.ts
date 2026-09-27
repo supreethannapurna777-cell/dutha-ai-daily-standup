@@ -19,6 +19,7 @@ interface ManagerRow {
         email: string | null;
         tenant_role: string;
         project_ids: string | null;
+        active: number;
 }
 
 interface MemberRow {
@@ -83,11 +84,12 @@ async function data(db: D1Database, tenantId: number): Promise<{
                 `).bind(tenantId).all<ProjectRow>(),
                 db.prepare(`
                         SELECT user.id, user.display_name, user.email, COALESCE(user.workops_role, user.tenant_role) AS tenant_role,
+                                user.active,
                                 GROUP_CONCAT(membership.project_id) AS project_ids
                         FROM management_users AS user
                         LEFT JOIN project_memberships AS membership
                                 ON membership.management_user_id = user.id
-                        WHERE user.tenant_id = ? AND user.active = 1
+                        WHERE user.tenant_id = ?
                         GROUP BY user.id ORDER BY user.display_name
                 `).bind(tenantId).all<ManagerRow>(),
                 db.prepare(`
@@ -129,7 +131,7 @@ function assignmentForm(
 }
 
 function teamLeadSelector(projectId: number, department: string, managers: ManagerRow[]): string {
-	const leads = managers.filter((manager) => manager.tenant_role === 'team_lead');
+	const leads = managers.filter((manager) => manager.active && manager.tenant_role === 'team_lead');
 	if (leads.length === 0) return '<small>Add a Team Lead to assign this team.</small>';
 	return `<form method="post" class="inline"><input type="hidden" name="action" value="assign_team_lead"><input type="hidden" name="project_id" value="${projectId}"><input type="hidden" name="department" value="${escapeHtml(department)}"><select name="management_user_id"><option value="">No lead</option>${leads.map((lead) => `<option value="${lead.id}">${escapeHtml(lead.display_name)}</option>`).join('')}</select><button class="assign" type="submit">Set lead</button></form>`;
 }
@@ -178,11 +180,14 @@ function page(
 	activationUrl: string | null = null,
 ): string {
 	const teams = teamGroups(members);
+	const activeManagers = managers.filter((manager) => manager.active);
+	const removedManagers = managers.filter((manager) => !manager.active);
 	const cards = projects.map((project) => {
-                const managerRows = managers.map((manager) => `
+		const managerRows = activeManagers.map((manager) => `
                         <tr><td>${escapeHtml(manager.display_name)}<small>${escapeHtml(manager.tenant_role)}</small></td>
                         <td>${assignmentForm("manager", project.id, "management_user_id", manager.id, assigned(manager.project_ids, project.id))}
-			${manager.email ? `<form method="post" class="inline"><input type="hidden" name="action" value="manager_activation"><input type="hidden" name="management_user_id" value="${manager.id}"><button type="submit">Activation link</button></form>` : ''}</td></tr>
+			${manager.email ? `<form method="post" class="inline"><input type="hidden" name="action" value="manager_activation"><input type="hidden" name="management_user_id" value="${manager.id}"><button type="submit">Activation link</button></form>` : ''}
+			<details class="overflow"><summary aria-label="Management user actions">•••</summary><form method="post"><input type="hidden" name="action" value="deactivate_manager"><input type="hidden" name="management_user_id" value="${manager.id}"><label>Type ${escapeHtml(manager.display_name)} to deactivate<input name="confirm_name" required autocomplete="off"></label><button class="danger" type="submit">Deactivate access</button></form></details></td></tr>
                 `).join("");
 		const memberRows = members.map((member) => `
                         <tr><td>${escapeHtml(member.name)}<small>${escapeHtml(member.department)}</small></td>
@@ -197,27 +202,31 @@ function page(
 			return `<tr><td><strong>${escapeHtml(team.department)}</strong><small>${assignedCount} of ${team.members.length} assigned</small></td><td class="inline">
 				${fullyAssigned ? '<span class="complete">Assigned</span>' : `<a class="button assign" href="#${modalId}">Assign team</a>`}
 				${teamLeadSelector(project.id, team.department, managers)}
+				<details class="overflow"><summary aria-label="Team actions">•••</summary><p>Archiving pauses automated scheduling for all active members of this team across the company. Their records are retained.</p><form method="post"><input type="hidden" name="action" value="archive_team"><input type="hidden" name="department" value="${escapeHtml(team.department)}"><label>Type ${escapeHtml(team.department)} to archive<input name="confirm_department" required autocomplete="off"></label><button class="danger" type="submit">Archive team</button></form></details>
 				${fullyAssigned ? "" : confirmationModal(modalId, "Assign entire team?", `Assign all ${team.members.length} active members of ${team.department} to ${project.name}?`, "add_team", project.id, team.department)}
 			</td></tr>`;
 		}).join("");
 		return `<details class="project">
-			<summary class="project-head"><div><span class="key">${escapeHtml(project.project_key)}</span><h2>${escapeHtml(project.name)}</h2><small>${managers.filter((manager) => assigned(manager.project_ids, project.id)).length} managers · ${members.filter((member) => assigned(member.project_ids, project.id)).length} members</small></div>
-			<span class="status">${project.active ? "Active" : "Inactive"}</span></summary>
+			<summary class="project-head"><div><span class="key">${escapeHtml(project.project_key)}</span><h2>${escapeHtml(project.name)}</h2><small>${activeManagers.filter((manager) => assigned(manager.project_ids, project.id)).length} managers · ${members.filter((member) => assigned(member.project_ids, project.id)).length} members</small></div>
+			<span class="status">${project.active ? "Active" : "Archived"}</span></summary>
+			<div class="project-tools"><details class="overflow"><summary aria-label="Project actions">•••</summary>${project.active ? `<p>Archiving hides this project from normal workspaces. Its history and assignments remain available for restoration.</p><form method="post"><input type="hidden" name="action" value="archive_project"><input type="hidden" name="project_id" value="${project.id}"><label>Type ${escapeHtml(project.project_key)} to archive<input name="confirm_key" required autocomplete="off"></label><button class="danger" type="submit">Archive project</button></form>` : `<form method="post"><input type="hidden" name="action" value="restore_project"><input type="hidden" name="project_id" value="${project.id}"><button type="submit">Restore project</button></form>`}</details></div>
 			<div class="columns"><div><h3>Management access</h3><table>${managerRows || '<tr><td>No managers configured.</td></tr>'}</table></div>
 			<div><div class="section-head"><h3>Teams</h3>${members.length === 0 || allAssigned ? `<span class="complete">${members.length === 0 ? "No members" : "All assigned"}</span>` : `<a class="button assign" href="#${allModalId}">Assign all members</a>`}</div>
 			<table>${teamRows || '<tr><td>No teams configured.</td></tr>'}</table>
 			${members.length > 0 && !allAssigned ? confirmationModal(allModalId, "Assign all members?", `Assign all ${members.length} active members to ${project.name}?`, "add_all_members", project.id) : ""}
 			<h3 class="member-heading">Individual members</h3><table>${memberRows || '<tr><td>No members configured.</td></tr>'}</table></div></div>
 	</details>`;
-        }).join("");
+		}).join("");
+        const archivedManagers = removedManagers.length ? `<details class="create archive"><summary><strong>Deactivated management accounts (${removedManagers.length})</strong></summary><p>Deactivated accounts cannot sign in. Restore access here.</p><table>${removedManagers.map((manager) => `<tr><td>${escapeHtml(manager.display_name)}<small>${escapeHtml(manager.tenant_role)} · ${escapeHtml(manager.email ?? 'No email')}</small></td><td><form method="post"><input type="hidden" name="action" value="restore_manager"><input type="hidden" name="management_user_id" value="${manager.id}"><button type="submit">Restore access</button></form></td></tr>`).join('')}</table></details>` : '';
         return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Projects and access · Dutha WorkOps</title><style>
 :root{font-family:Inter,Arial,sans-serif;color:#dbeafe;background:#070b18;color-scheme:dark}*{box-sizing:border-box}body{margin:0;padding:30px;min-height:100vh;background:radial-gradient(circle at 12% 0,#172554 0,transparent 38%),radial-gradient(circle at 92% 8%,#312e81 0,transparent 32%),#070b18}main{max-width:1250px;margin:auto}header{display:flex;justify-content:space-between;gap:20px;align-items:start;margin-bottom:22px}h1,h2,h3{color:#f8fafc}h1{margin:0 0 6px}.muted,small{display:block;color:#94a3b8}.top{color:#93c5fd;font-weight:700}.notice,.error{padding:13px;border-radius:12px;margin:14px 0}.notice{background:#0c4a6e;color:#e0f2fe}.error{background:#450a0a;color:#fecaca}.create,.project{background:#111827d9;border:1px solid #334155;border-radius:18px;box-shadow:0 18px 50px #0005;margin-bottom:16px;backdrop-filter:blur(18px)}.create{padding:20px}.project{overflow:hidden}.project[open]{border-color:#3b82f6}.project-head{padding:20px;cursor:pointer;list-style:none}.project-head::-webkit-details-marker{display:none}.project-head:after{content:'Open';color:#93c5fd;font-size:12px;font-weight:800;margin-left:auto}.project[open]>.project-head:after{content:'Close'}.columns{padding:0 20px 20px}.create-grid{display:grid;grid-template-columns:1fr 2fr auto;gap:12px;align-items:end}label{display:grid;gap:6px;font-weight:700}input,select{padding:11px;border:1px solid #475569;border-radius:10px;font:inherit;background:#0b1220;color:#f8fafc}button,.button{border:0;border-radius:10px;padding:10px 14px;color:#fff;background:linear-gradient(135deg,#2563eb,#7c3aed);font-weight:800;cursor:pointer;text-decoration:none;display:inline-block}.project-head,.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.project-head h2,.section-head h3{margin:5px 0}.key,.status{font-size:12px;font-weight:800}.key{color:#60a5fa}.status{color:#bfdbfe;background:#1e3a8a;padding:6px 9px;border-radius:99px}.columns{display:grid;grid-template-columns:1fr 1fr;gap:24px;border-top:1px solid #273449}table{width:100%;border-collapse:collapse}td{padding:10px;border-bottom:1px solid #273449}.inline{text-align:right}.assign{background:linear-gradient(135deg,#2563eb,#06b6d4)}.remove{background:#991b1b;padding:7px 10px}.complete{color:#bfdbfe;background:#1e3a8a;border-radius:99px;padding:6px 9px;font-size:12px;font-weight:800}.member-heading{margin-top:24px}.manager-form{margin-top:18px;border-top:1px solid #334155;padding-top:18px}.manager-grid{display:grid;grid-template-columns:1.3fr 1.5fr 1fr auto;gap:10px;align-items:end}.modal{display:none;position:fixed;inset:0;background:#020617df;z-index:10;padding:20px;align-items:center;justify-content:center}.modal:target{display:flex}.modal-card{width:min(500px,100%);background:#111827;border:1px solid #334155;border-radius:16px;padding:24px;box-shadow:0 20px 60px #0008}.modal-card h3{margin-top:0}.modal-actions{display:flex;justify-content:flex-end;align-items:center;gap:12px;margin-top:20px}.cancel{color:#cbd5e1;font-weight:700;text-decoration:none}@media(max-width:800px){body{padding:15px}.columns,.create-grid,.manager-grid{grid-template-columns:1fr}header{flex-direction:column}.section-head{align-items:flex-start;flex-direction:column}}
+.project-tools{padding:10px 20px;display:flex;justify-content:flex-end}.overflow{position:relative;display:inline-block;text-align:left}.overflow>summary{list-style:none;cursor:pointer;border:1px solid #475569;background:#172033;border-radius:9px;padding:5px 9px;color:#dbeafe;font-weight:900}.overflow>summary::-webkit-details-marker{display:none}.overflow[open] form,.overflow[open]>p{padding:14px;margin:6px 0;background:#111827;border:1px solid #475569;border-radius:12px}.overflow[open] form label{margin:10px 0}.overflow>p{color:#94a3b8}.danger{background:#991b1b}
 </style></head><body><main><header><div><h1>Projects and access</h1><div class="muted">Create projects and control who can see each one.</div></div><a class="top" href="/dashboard">Return to dashboard</a></header>
 ${message ? `<div class="notice">${escapeHtml(message)}</div>` : ""}${activationUrl ? `<div class="notice"><strong>Secure activation link (valid for 24 hours):</strong><code>${escapeHtml(activationUrl)}</code><p>Send this privately to the manager. Creating another link revokes this one.</p></div>` : ''}${error ? `<div class="error">${escapeHtml(error)}</div>` : ""}
 <details class="create"><summary><strong>＋ Add project or management user</strong><span class="muted"> Keep setup controls out of the daily workspace</span></summary><h2>Create project</h2><form method="post" class="create-grid"><input type="hidden" name="action" value="create_project"><label>Project key<input name="project_key" maxlength="20" placeholder="CLIENT-OPS" required></label><label>Project name<input name="name" maxlength="100" required></label><button type="submit">Create project</button></form>
 <form method="post" class="manager-form"><input type="hidden" name="action" value="create_manager"><h2>Add management user</h2><div class="manager-grid"><label>Name<input name="display_name" maxlength="100" required></label><label>Work email<input name="email" type="email" maxlength="254" required></label><label>Role<select name="tenant_role"><option value="project_manager">Project manager</option><option value="team_lead">Team lead</option><option value="portfolio_leader">Portfolio leader</option><option value="ceo">CEO</option><option value="admin">Administrator</option></select></label><button type="submit">Add user</button></div></form></details>
-${cards || '<section class="project">No projects configured.</section>'}</main></body></html>`;
+${archivedManagers}${cards || '<section class="project">No projects configured.</section>'}</main></body></html>`;
 }
 
 async function existsInTenant(
@@ -251,6 +260,47 @@ async function mutate(
                 }
                 return null;
         }
+	if (action === 'archive_project' || action === 'restore_project') {
+		const projectId = Number(form.get('project_id'));
+		const project = Number.isSafeInteger(projectId) ? await env.DB.prepare(`SELECT project_key, active FROM projects WHERE id=? AND tenant_id=?`).bind(projectId, actor.tenantId).first<{project_key:string;active:number}>() : null;
+		if (!project) return 'Project was not found.';
+		if (action === 'archive_project') {
+			if (String(form.get('confirm_key') ?? '').trim().toUpperCase() !== project.project_key) return 'Type the project key exactly to archive this project.';
+			await env.DB.prepare(`UPDATE projects SET active=0, updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant_id=?`).bind(projectId, actor.tenantId).run();
+		} else {
+			await env.DB.prepare(`UPDATE projects SET active=1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant_id=?`).bind(projectId, actor.tenantId).run();
+		}
+		return null;
+	}
+	if (action === 'deactivate_manager' || action === 'restore_manager') {
+		const userId = Number(form.get('management_user_id'));
+		const user = Number.isSafeInteger(userId) ? await env.DB.prepare(`SELECT id, display_name, COALESCE(workops_role, tenant_role) AS role, active FROM management_users WHERE id=? AND tenant_id=?`).bind(userId, actor.tenantId).first<{id:number;display_name:string;role:string;active:number}>() : null;
+		if (!user) return 'Management account was not found.';
+		if (action === 'deactivate_manager') {
+			if (user.id === 1 || user.id === actor.userId) return 'The primary administrator and your own signed-in account cannot be deactivated here.';
+			if (String(form.get('confirm_name') ?? '').trim() !== user.display_name) return 'Type the management user name exactly to deactivate access.';
+			if (user.role === 'admin') {
+				const count = await env.DB.prepare(`SELECT COUNT(*) AS count FROM management_users WHERE tenant_id=? AND active=1 AND COALESCE(workops_role, tenant_role)='admin'`).bind(actor.tenantId).first<{count:number}>();
+				if ((count?.count ?? 0) <= 1) return 'The last active administrator cannot be deactivated.';
+			}
+			await env.DB.prepare(`UPDATE management_users SET active=0, updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant_id=?`).bind(userId, actor.tenantId).run();
+		} else {
+			await env.DB.prepare(`UPDATE management_users SET active=1, updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant_id=?`).bind(userId, actor.tenantId).run();
+		}
+		return null;
+	}
+	if (action === 'archive_team') {
+		const department = String(form.get('department') ?? '').trim();
+		if (!department || department.length > 100 || String(form.get('confirm_department') ?? '').trim() !== department) return 'Type the team name exactly to archive the team.';
+		const found = await env.DB.prepare(`SELECT COUNT(*) AS count FROM team_members WHERE tenant_id=? AND active=1 AND TRIM(COALESCE(department,''))=?`).bind(actor.tenantId, department === 'Unassigned' ? '' : department).first<{count:number}>();
+		if (!found?.count) return 'The team has no active members to archive.';
+		const actualDepartment = department === 'Unassigned' ? '' : department;
+		await env.DB.batch([
+			env.DB.prepare(`UPDATE team_members SET active=0, scheduling_enabled=0 WHERE tenant_id=? AND active=1 AND TRIM(COALESCE(department,''))=?`).bind(actor.tenantId, actualDepartment),
+			env.DB.prepare(`DELETE FROM team_lead_assignments WHERE department=? AND project_id IN (SELECT id FROM projects WHERE tenant_id=?)`).bind(department, actor.tenantId),
+		]);
+		return null;
+	}
 		if (action === "create_manager") {
                 const displayName = String(form.get("display_name") ?? "").trim();
                 const email = String(form.get("email") ?? "").trim().toLowerCase();
@@ -411,7 +461,7 @@ export async function projectManagementResponse(
 ): Promise<Response> {
         if (!isAuthorised(request, env)) return new Response("Authentication required.", { status: 401 });
         const actor = principal(request);
-        if (actor.role !== "admin") return new Response("Administrator access required.", { status: 403 });
+        if (!['admin', 'ceo'].includes(actor.role)) return new Response("Administrator or CEO access required.", { status: 403 });
         if (request.method === "GET") return render(request, env, actor);
         if (request.method !== "POST") return new Response("Method not allowed.", { status: 405, headers: { Allow: "GET, POST" } });
         if (!sameOrigin(request)) return new Response("Invalid request origin.", { status: 403 });
