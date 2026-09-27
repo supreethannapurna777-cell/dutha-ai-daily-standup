@@ -56,6 +56,7 @@ import { deploymentPreflightResponse } from "./deployment-preflight";
 import { employeePortalResponse } from "./employee-portal";
 import { settingsManagementResponse } from "./settings-management";
 import { emailConnectionManagementResponse } from "./email-connection-management";
+import { integrationHealthResponse } from "./integration-health";
 import { duthaUiScriptResponse, publicLandingResponse } from "./ui";
 import { correctionManagementResponse } from "./correction-management";
 import { jiraConnectionManagementResponse } from "./jira-connection-management";
@@ -365,6 +366,10 @@ export default {
 
 		if (url.pathname === "/dashboard/email") {
 			return emailConnectionManagementResponse(managementRequest, env);
+		}
+
+		if (url.pathname === "/dashboard/integrations/health") {
+			return integrationHealthResponse(managementRequest, env);
 		}
 
 		if (url.pathname === "/dashboard/whatsapp") {

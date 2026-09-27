@@ -29,7 +29,9 @@ describe('organisation email settings', () => {
 	it('opens a dedicated email technical setup page from the connection hub', async () => {
 		const response=await settingsManagementResponse(request(),settingsEnv);
 		expect(response.status).toBe(200);
-		expect(await response.text()).toContain('href="/dashboard/email">Technical setup');
+		const page=await response.text();
+		expect(page).toContain('href="/dashboard/email">Technical setup');
+		expect(page).toContain('href="/dashboard/integrations/health">Integration health');
 	});
 
 	it('allows a CEO to save company WhatsApp identity without provider credentials', async () => {
