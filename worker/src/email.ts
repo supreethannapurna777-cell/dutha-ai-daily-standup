@@ -1,4 +1,5 @@
 import type { WorkerEnv } from './env';
+import { decryptIntegrationSecret } from './integration-secrets';
 
 export interface OrganisationEmailSettings {
 	company_name: string;
@@ -9,6 +10,35 @@ export interface OrganisationEmailSettings {
 
 export async function emailSettings(db: D1Database, tenantId: number): Promise<OrganisationEmailSettings | null> {
 	return db.prepare(`SELECT company_name, sender_name, from_email, reply_to_email FROM organisation_email_settings WHERE tenant_id=? LIMIT 1`).bind(tenantId).first<OrganisationEmailSettings>();
+}
+
+async function resendApiKey(env: WorkerEnv, tenantId: number): Promise<string | null> {
+	const connection = await env.DB.prepare(`SELECT resend_api_key_ciphertext,resend_api_key_iv,email_connection_status FROM organisation_email_settings WHERE tenant_id=? LIMIT 1`).bind(tenantId).first<{resend_api_key_ciphertext:string|null;resend_api_key_iv:string|null;email_connection_status:string}>();
+	if (connection?.email_connection_status === 'disconnected' || (connection?.resend_api_key_ciphertext && connection.email_connection_status !== 'connected')) return null;
+	if (connection?.resend_api_key_ciphertext && connection.resend_api_key_iv && env.INTEGRATION_ENCRYPTION_KEY) {
+		return decryptIntegrationSecret(connection.resend_api_key_ciphertext, connection.resend_api_key_iv, env.INTEGRATION_ENCRYPTION_KEY, tenantId, 0, 'resend', 'api_key');
+	}
+	// Keep the existing shared sender working for the original workspace only.
+	return tenantId === 1 ? env.RESEND_API_KEY?.trim() || null : null;
+}
+
+export async function verifyResendConnection(apiKey:string, fromEmail:string, fetcher:typeof fetch=fetch):Promise<{ok:boolean;reason?:string}> {
+	const response=await fetcher('https://api.resend.com/domains',{headers:{Authorization:`Bearer ${apiKey}`}});
+	if (response.status===401 || response.status===403) return {ok:false,reason:'Resend rejected this API key. Check the key and try again.'};
+	if (!response.ok) return {ok:false,reason:`Resend verification returned ${response.status}.`};
+	let payload:{data?:Array<{name?:string;status?:string}>};
+	try { payload=await response.json() as {data?:Array<{name?:string;status?:string}>}; } catch { return {ok:false,reason:'Resend returned an unreadable domains response.'}; }
+	const domain=fromEmail.split('@')[1]?.toLowerCase();
+	const verified=(payload.data??[]).some(item=>item.name?.toLowerCase()===domain && item.status?.toLowerCase()==='verified');
+	return verified ? {ok:true} : {ok:false,reason:`Verify the ${domain||'sender'} domain in Resend before connecting this address.`};
+}
+
+export async function sendTestEmail(env:WorkerEnv,tenantId:number,to:string,fetcher:typeof fetch=fetch):Promise<{sent:boolean;reason?:string}> {
+	const [settings,apiKey]=await Promise.all([emailSettings(env.DB,tenantId),resendApiKey(env,tenantId)]);
+	if (!settings || !apiKey) return {sent:false,reason:'Connect a verified company email sender first.'};
+	const response=await fetcher('https://api.resend.com/emails',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({from:`${settings.sender_name} <${settings.from_email}>`,to:[to],reply_to:settings.reply_to_email||undefined,subject:`${settings.company_name} email connection test`,html:`<div style="font-family:Arial,sans-serif"><h2>Email connection verified</h2><p>Dutha WorkOps successfully sent this test for ${escapeHtml(settings.company_name)}.</p><p>Replies will go to ${escapeHtml(settings.reply_to_email||settings.from_email)}.</p></div>`})});
+	if (!response.ok) return {sent:false,reason:`Resend could not send the test message (${response.status}).`};
+	return {sent:true};
 }
 
 function escapeHtml(value: string): string {
@@ -24,10 +54,11 @@ export async function sendManagerActivationEmail(
 	fetcher: typeof fetch = fetch,
 ): Promise<{ sent: boolean; reason?: string }> {
 	const settings = await emailSettings(env.DB, tenantId);
-	if (!env.RESEND_API_KEY || !settings) return { sent: false, reason: 'Email delivery is not configured.' };
+	const apiKey=await resendApiKey(env,tenantId);
+	if (!apiKey || !settings) return { sent: false, reason: 'Email delivery is not configured.' };
 	const response = await fetcher('https://api.resend.com/emails', {
 		method: 'POST',
-		headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+		headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			from: `${settings.sender_name} <${settings.from_email}>`,
 			to: [to],
@@ -49,10 +80,11 @@ export async function sendEmployeeActivationEmail(
 	fetcher: typeof fetch = fetch,
 ): Promise<{ sent: boolean; reason?: string }> {
 	const settings = await emailSettings(env.DB, tenantId);
-	if (!env.RESEND_API_KEY || !settings) return { sent: false, reason: 'Email delivery is not configured.' };
+	const apiKey=await resendApiKey(env,tenantId);
+	if (!apiKey || !settings) return { sent: false, reason: 'Email delivery is not configured.' };
 	const response = await fetcher('https://api.resend.com/emails', {
 		method: 'POST',
-		headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+		headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			from: `${settings.sender_name} <${settings.from_email}>`,
 			to: [to],

@@ -1,5 +1,5 @@
 import { env } from 'cloudflare:test';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkerEnv } from '../src/env';
 import { settingsManagementResponse } from '../src/settings-management';
 
@@ -11,6 +11,7 @@ function request(method = 'GET', body?: string): Request {
 
 describe('organisation email settings', () => {
 	beforeEach(async () => env.DB.prepare(`DELETE FROM organisation_email_settings WHERE tenant_id=1`).run());
+	afterEach(() => vi.unstubAllGlobals());
 
 	it('saves editable sender identity without storing an API key', async () => {
 		const response = await settingsManagementResponse(request('POST', new URLSearchParams({ action:'save', company_name:'Aurowise', sender_name:'Dutha WorkOps', from_email:'dutha@example.com', reply_to_email:'ops@example.com' }).toString()), settingsEnv);
@@ -32,5 +33,30 @@ describe('organisation email settings', () => {
 		const response = await settingsManagementResponse(ceo, settingsEnv);
 		expect(response.status).toBe(303);
 		expect(await env.DB.prepare('SELECT whatsapp_business_name, whatsapp_business_number FROM organisation_connection_profiles WHERE tenant_id=1').first()).toEqual({ whatsapp_business_name:'Aurowise', whatsapp_business_number:'919876543210' });
+	});
+
+	it('verifies and encrypts each company Resend key before saving it', async () => {
+		const key=btoa('0123456789abcdef0123456789abcdef');
+		const fetcher=vi.fn(async ()=>new Response(JSON.stringify({data:[{name:'aurowise.example',status:'verified'}]}),{status:200}));
+		vi.stubGlobal('fetch',fetcher);
+		const requestEnv={...settingsEnv,INTEGRATION_ENCRYPTION_KEY:key} as WorkerEnv;
+		const body=new URLSearchParams({action:'save_identity',company_name:'Aurowise',sender_name:'Aurowise WorkOps',from_email:'ops@aurowise.example',reply_to_email:'help@aurowise.example',resend_api_key:'re_company_secret'}).toString();
+		const response=await settingsManagementResponse(request('POST',body),requestEnv);
+		expect(response.status).toBe(303);
+		const row=await env.DB.prepare('SELECT resend_api_key_ciphertext,resend_api_key_iv,email_connection_status,email_last_verified_at FROM organisation_email_settings WHERE tenant_id=1').first<{resend_api_key_ciphertext:string;resend_api_key_iv:string;email_connection_status:string;email_last_verified_at:string}>();
+		expect(row?.email_connection_status).toBe('connected');
+		expect(row?.resend_api_key_ciphertext).not.toBe('re_company_secret');
+		expect(row?.resend_api_key_iv).toBeTruthy();
+		expect(row?.email_last_verified_at).toBeTruthy();
+		expect(fetcher).toHaveBeenCalledWith('https://api.resend.com/domains',{headers:{Authorization:'Bearer re_company_secret'}});
+	});
+
+	it('does not save an email key when the sender domain is not verified', async () => {
+		vi.stubGlobal('fetch',vi.fn(async ()=>new Response(JSON.stringify({data:[]}),{status:200})));
+		const key=btoa('0123456789abcdef0123456789abcdef');
+		const body=new URLSearchParams({action:'save_identity',company_name:'Aurowise',sender_name:'Aurowise WorkOps',from_email:'ops@aurowise.example',reply_to_email:'help@aurowise.example',resend_api_key:'re_company_secret'}).toString();
+		const response=await settingsManagementResponse(request('POST',body),{...settingsEnv,INTEGRATION_ENCRYPTION_KEY:key} as WorkerEnv);
+		expect(response.status).toBe(400);
+		expect(await env.DB.prepare('SELECT tenant_id FROM organisation_email_settings WHERE tenant_id=1').first()).toBeNull();
 	});
 });
