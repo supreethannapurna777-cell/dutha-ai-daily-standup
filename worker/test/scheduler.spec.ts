@@ -56,6 +56,7 @@ interface MemberOptions {
         reminder1Time?: string;
         reminder2Time?: string;
         schedulingEnabled?: number;
+        enrolmentStatus?: "invited" | "enrolled" | "suspended";
 }
 
 
@@ -76,9 +77,10 @@ async function insertMember(
                                 initial_time,
                                 reminder_1_time,
                                 reminder_2_time,
-                                scheduling_enabled
+                                scheduling_enabled,
+                                enrolment_status
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `,
                 )
                 .bind(
@@ -97,6 +99,8 @@ async function insertMember(
                                 ?? "18:00",
                         options.schedulingEnabled
                                 ?? 1,
+                        options.enrolmentStatus
+                                ?? "enrolled",
                 )
                 .run();
 }
@@ -297,6 +301,32 @@ describe("timezone-aware scheduled automation", () => {
                 );
 
                 expect(result.selected).toBe(0);
+                expect(fetcher).not.toHaveBeenCalled();
+        });
+
+        it("never schedules an invited member even when scheduling is enabled", async () => {
+                await insertMember("Kiran", "919200000000", {
+                        schedulingEnabled: 1,
+                        enrolmentStatus: "invited",
+                });
+
+                const fetcher = successfulFetcher();
+                const scheduled = await runScheduledAction(
+                        schedulerCron,
+                        indiaInitialTime,
+                        schedulerEnv("true"),
+                        fetcher,
+                );
+                const manualProject = await runProjectInitialNow(
+                        schedulerEnv("true"), 1, 1, indiaInitialTime, fetcher,
+                );
+                const manualDepartment = await runDepartmentInitialNow(
+                        schedulerEnv("true"), 1, 1, "Development", indiaInitialTime, fetcher,
+                );
+
+                expect(scheduled.selected).toBe(0);
+                expect(manualProject.selected).toBe(0);
+                expect(manualDepartment.selected).toBe(0);
                 expect(fetcher).not.toHaveBeenCalled();
         });
 
