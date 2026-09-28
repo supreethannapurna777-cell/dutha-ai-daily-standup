@@ -162,7 +162,7 @@ async function getScheduledMembers(
                         FROM team_members
                         WHERE active = 1
                                 AND scheduling_enabled = 1
-                                AND enrolment_status = 'enrolled'
+                                AND (enrolment_status = 'enrolled' OR (enrolment_status = 'invited' AND pre_enrolment_messaging_enabled = 1))
                                 AND phone NOT LIKE 'pending-%'
                                 AND phone NOT LIKE 'removed-%'
                         ORDER BY name
@@ -430,7 +430,7 @@ export async function runProjectInitialNow(
                 WHERE member.tenant_id = ?
                         AND member.active = 1
                         AND member.scheduling_enabled = 1
-                        AND member.enrolment_status = 'enrolled'
+                        AND (member.enrolment_status = 'enrolled' OR (member.enrolment_status = 'invited' AND member.pre_enrolment_messaging_enabled = 1))
                         AND member.phone NOT LIKE 'pending-%'
                         AND member.phone NOT LIKE 'removed-%'
                         AND (
@@ -492,7 +492,7 @@ export async function runDepartmentInitialNow(
                         AND member.department = ?
                         AND member.active = 1
                         AND member.scheduling_enabled = 1
-                        AND member.enrolment_status = 'enrolled'
+                        AND (member.enrolment_status = 'enrolled' OR (member.enrolment_status = 'invited' AND member.pre_enrolment_messaging_enabled = 1))
                         AND member.phone NOT LIKE 'pending-%'
                         AND member.phone NOT LIKE 'removed-%'
                         AND (

@@ -14,6 +14,9 @@ interface ManagedMember {
 	reminder_1_time: string;
 	reminder_2_time: string;
 	scheduling_enabled: number;
+	enrolment_status: string;
+	pre_enrolment_messaging_enabled: number;
+	has_known_phone: number;
 }
 
 const allowedTimezones = new Set(['Asia/Kolkata', 'Europe/London']);
@@ -124,7 +127,10 @@ async function getMembers(db: D1Database, tenantId: number, projectId: number, d
                                 initial_time,
                                 reminder_1_time,
                                 reminder_2_time,
-                                scheduling_enabled
+                                scheduling_enabled,
+                                enrolment_status,
+                                pre_enrolment_messaging_enabled,
+                                CASE WHEN phone NOT LIKE 'pending-%' AND phone NOT LIKE 'removed-%' THEN 1 ELSE 0 END AS has_known_phone
                         FROM team_members
                         WHERE tenant_id = ?
                                 AND (? IS NULL OR department = ?)
@@ -245,6 +251,7 @@ function memberCard(member: ManagedMember): string {
                                         ${dayCheckboxes(member)}
                                 </div>
                         </fieldset>
+                        ${member.enrolment_status === 'invited' && member.has_known_phone ? `<label class="pre-enrolment-opt-in"><input type="checkbox" name="pre_enrolment_messaging_enabled" value="1" ${member.pre_enrolment_messaging_enabled ? 'checked' : ''}>Allow scheduled WhatsApp requests and reminders to this known number before the employee completes registration. Enable only after confirming they agree to receive these messages.</label>` : ''}
 
 				<div class="toggles">
                                 <label>
@@ -716,6 +723,7 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
 	const workingDays = normaliseWorkingDays(form);
 
 	const schedulingEnabled = form.get('scheduling_enabled') === '1' ? 1 : 0;
+	const preEnrolmentMessagingEnabled = form.get('pre_enrolment_messaging_enabled') === '1' ? 1 : 0;
 
 	if (!Number.isInteger(memberId) || memberId <= 0) {
 		return 'Invalid team member.';
@@ -749,7 +757,12 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
                                 initial_time = ?,
                                 reminder_1_time = ?,
                                 reminder_2_time = ?,
-                                scheduling_enabled = ?
+                                scheduling_enabled = ?,
+                                pre_enrolment_messaging_enabled = CASE
+                                        WHEN enrolment_status = 'invited'
+                                                AND phone NOT LIKE 'pending-%'
+                                                AND phone NOT LIKE 'removed-%'
+                                        THEN ? ELSE 0 END
                         WHERE id = ? AND tenant_id = ?
                                 AND (? IS NULL OR department = ?)
                                 AND (
@@ -769,6 +782,7 @@ async function updateMember(form: FormData, env: WorkerEnv, principal: Managemen
 			reminder1Time,
 			reminder2Time,
 			schedulingEnabled,
+			preEnrolmentMessagingEnabled,
 			memberId,
 			principal.tenantId,
 			departmentScope,

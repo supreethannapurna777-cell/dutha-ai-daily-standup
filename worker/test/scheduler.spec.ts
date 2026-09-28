@@ -57,6 +57,7 @@ interface MemberOptions {
         reminder2Time?: string;
         schedulingEnabled?: number;
         enrolmentStatus?: "invited" | "enrolled" | "suspended";
+        preEnrolmentMessagingEnabled?: number;
 }
 
 
@@ -78,9 +79,10 @@ async function insertMember(
                                 reminder_1_time,
                                 reminder_2_time,
                                 scheduling_enabled,
-                                enrolment_status
+                                enrolment_status,
+                                pre_enrolment_messaging_enabled
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         `,
                 )
                 .bind(
@@ -101,6 +103,8 @@ async function insertMember(
                                 ?? 1,
                         options.enrolmentStatus
                                 ?? "enrolled",
+                        options.preEnrolmentMessagingEnabled
+                                ?? 0,
                 )
                 .run();
 }
@@ -328,6 +332,27 @@ describe("timezone-aware scheduled automation", () => {
                 expect(manualProject.selected).toBe(0);
                 expect(manualDepartment.selected).toBe(0);
                 expect(fetcher).not.toHaveBeenCalled();
+        });
+
+        it("sends to an invited known number only after manager opt-in", async () => {
+                await insertMember("Kiran", "447700900123", {
+                        schedulingEnabled: 1,
+                        enrolmentStatus: "invited",
+                        preEnrolmentMessagingEnabled: 1,
+                });
+
+                const fetcher = successfulFetcher();
+                const scheduled = await runScheduledAction(schedulerCron, indiaInitialTime, schedulerEnv("true"), fetcher);
+                expect(scheduled.sent).toBe(1);
+
+                await env.DB.prepare("DELETE FROM sent_messages").run();
+                const project = await runProjectInitialNow(schedulerEnv("true"), 1, 1, indiaInitialTime, fetcher);
+                expect(project.sent).toBe(1);
+
+                await env.DB.prepare("DELETE FROM sent_messages").run();
+                const department = await runDepartmentInitialNow(schedulerEnv("true"), 1, 1, "Development", indiaInitialTime, fetcher);
+                expect(department.sent).toBe(1);
+                expect(fetcher).toHaveBeenCalledTimes(3);
         });
 
         it("manually sends once per member local date", async () => {

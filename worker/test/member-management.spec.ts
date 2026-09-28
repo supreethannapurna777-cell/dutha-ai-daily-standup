@@ -255,6 +255,41 @@ describe("member schedule management", () => {
                 });
         });
 
+        it("requires manager opt-in before scheduling a known invited number", async () => {
+                const invited = await env.DB.prepare(`
+                        INSERT INTO team_members (
+                                name, phone, department, timezone, tenant_id,
+                                primary_project_id, enrolment_status, scheduling_enabled
+                        ) VALUES ('Kiran', '447700900123', 'IT -Vice President', 'Europe/London', 1, 1, 'invited', 0)
+                        RETURNING id
+                `).first<{ id: number }>();
+                if (!invited) throw new Error('Invited member was not created.');
+
+                const page = await memberManagementResponse(authorisedRequest(), managementEnv);
+                expect(await page.text()).toContain('Allow scheduled WhatsApp requests and reminders to this known number before the employee completes registration.');
+
+                const body = new URLSearchParams({
+                        action: 'update',
+                        member_id: String(invited.id),
+                        timezone: 'Europe/London',
+                        initial_time: '12:00',
+                        reminder_1_time: '15:00',
+                        reminder_2_time: '18:00',
+                        scheduling_enabled: '1',
+                        pre_enrolment_messaging_enabled: '1',
+                });
+                for (const day of ['MON', 'TUE', 'WED', 'THU', 'FRI']) body.append('working_days', day);
+
+                const response = await memberManagementResponse(authorisedRequest('POST', body), managementEnv);
+                expect(response.status).toBe(303);
+
+                const saved = await env.DB.prepare(`
+                        SELECT scheduling_enabled, pre_enrolment_messaging_enabled
+                        FROM team_members WHERE id = ?
+                `).bind(invited.id).first<{ scheduling_enabled: number; pre_enrolment_messaging_enabled: number }>();
+                expect(saved).toEqual({ scheduling_enabled: 1, pre_enrolment_messaging_enabled: 1 });
+        });
+
         it("rejects an invalid schedule order", async () => {
                 const body = new URLSearchParams({
                         action: "update",
